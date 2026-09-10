@@ -61,6 +61,7 @@ routines ( mark_regions R2
            diminutive
            diminutive_stem
            verbal_noun
+           comparative
            derivational
            tidy_up
 )
@@ -442,13 +443,15 @@ backwardmode (
         )
     )
 
+    // Comparative -іш (сильніше, детальніше), removed before derivational so
+    // the remaining stem gets the same -ьн/-нн treatment as the positive form
+    // (детальніше → детальн → детал = детальна).
+    define comparative as (
+        ['{i}{sh}'] delete
+    )
+
     define tidy_up as (
         [substring] among (
-            // Superlative/comparative forms
-            '{i}{sh}'
-               (delete
-                ['{n}'] '{n}' delete
-               )
             // Consonant alternations in verbs
             '{l}'
                ('{b}' or '{p}' or '{v}' or '{m}' delete)
@@ -505,6 +508,8 @@ define stem as (
             // Professional suffixes (after noun declension removed)
             // Skip if diminutive already fired (prevents -ач removal on собач- from собаченітко)
             not found_diminutive not found_professional try professional
+
+            do comparative
 
             // Derivational suffixes (in R2 only)
             do derivational
