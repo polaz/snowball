@@ -408,8 +408,10 @@ backwardmode (
             '{i}{s}{t}{'}'        // -ість
 
             // Adjectival derivational
-            '{e}{l}{'}{n}'        // -ельн (кахельний → кахел after adj -ий)
-            '{l}{'}{n}'           // -льн (кахльний → кахл)
+            // -ьн: strip only the soft sign + н of -льн- adjectives so the
+            // stem matches the base noun and its -ізм/-іст derivatives
+            // (акварельний → акварел = акварель, соціальний → соціал = соціалізм)
+            '{'}{n}'
             '{s}{'}{k}'           // -ськ (козацький → козац)
             '{z}{'}{k}'           // -зьк
             '{u}{v}{a}{t}'        // -уват
