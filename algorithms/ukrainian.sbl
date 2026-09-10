@@ -274,9 +274,14 @@ backwardmode (
                 '{ie}{sh}' '{e}{sh}' '{y}{sh}'  // Present 2nd sg (знаєш, живеш, робиш)
                 '{ie}'                          // Present 3rd sg/future
                 '{i`}'                          // Imperative sg
-                '{iu}' '{u}'                    // Present 1st sg (fallback)
+                '{u}'                           // Present 1st sg (fallback)
                 '{v}'                           // Past masc (fallback)
                     (delete)
+                // Present 1st sg -ю (fallback), but not after -іст: -істю is
+                // the instrumental of -ість abstract nouns (активністю), which
+                // noun maps back to -ість so it stems like the nominative.
+                '{iu}'
+                    ( not '{i}{s}{t}' delete )
                 // Infinitive -ти (fallback), but skip -нти: Ukrainian has no
                 // infinitive ending in -нти, so -нти is always a noun plural
                 // (документи, моменти, студенти). Deleting -ти there over-stems
@@ -298,6 +303,11 @@ backwardmode (
         ( ['{o}{s}{t}{i}'] not atlimit delete )
         or
         ( [substring] among (
+                // -істю: instrumental sg of -ість abstract nouns. Restore the
+                // nominative so derivational (-ність/-ість) and tidy_up treat
+                // it exactly like -ість (активністю → активність → актив).
+                '{i}{s}{t}{iu}' (<- '{i}{s}{t}{'}')
+
                 // Fleeting vowel: -ець → -ц (nominative → oblique stem)
                 // живописець→живописц (groups with живописця/цю/цем/ці)
                 '{e}{ts}{'}' (<- '{ts}')
