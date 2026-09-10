@@ -72,7 +72,8 @@ externals ( stem )
 
 integers ( pV p2 )
 
-booleans ( found_diminutive found_professional found_ia found_verb )
+booleans ( found_diminutive found_professional found_ia found_verb
+           found_la_noun found_ty_noun )
 
 groupings ( v )
 
@@ -407,33 +408,24 @@ backwardmode (
                 // the dative of -ство nouns (товариству), left for noun.
                 '{u}'
                     ( not '{s}{t}{v}' delete )
-                // Past tense -ла/-ли/-ло, but not after о (Микола, школа,
-                // апостоли, навколо: nouns far outnumber verbs like виборола),
-                // not after л, т, д (Михайло, Абдулла, світло, сідло: no verb
-                // has these before the ending), and -ло not after е unless
-                // -вело (весело, ремесло are not verbs; призвело, привело
-                // are). Consonant-stem verbs keep the plain ending (могли,
-                // вийшло, принесла). A letter outside pV cannot be tested, so
-                // 5-letter words (стали, школа) are treated as before.
-                // -ороли/-орола are the one verb family behind о (бороли,
-                // виборола), so о only guards when not preceded by р.
-                '{l}{a}' '{l}{y}'
-                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}' or ('{e}' not '{v}')) delete )
-                '{l}{o}'
-                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}' or ('{e}' not '{v}')) delete )
+                // Past tense -ла/-ли/-ло, unless the letter before the
+                // ending marks a noun (found_la_noun, tested on the whole
+                // word in stem: школа, число, Павло, світло).
+                // Consonant-stem verbs keep the plain ending (могли,
+                // вийшло, принесла).
+                '{l}{a}' '{l}{y}' '{l}{o}'
+                    ( not found_la_noun delete )
                 // Present 1st sg -ю (fallback), but not after -іст: -істю is
                 // the instrumental of -ість abstract nouns (активністю), which
                 // noun maps back to -ість so it stems like the nominative.
                 '{iu}'
                     ( not '{i}{s}{t}' delete )
-                // Infinitive -ти (fallback), but not after н, е or о: no
-                // Ukrainian infinitive ends in -нти/-ети, and the only -оти
-                // infinitives (бороти, побороти) are rare next to the noun
-                // plurals документи, портрети, роботи, повороти. The guard
-                // lets noun -и run. (-кти cannot be guarded: втекти and
-                // факти both have the к inside pV.)
+                // Infinitive -ти (fallback), unless the letter before the
+                // ending marks a noun plural (found_ty_noun, tested on the
+                // whole word in stem: документи, роботи, факти, карти).
+                // The guard lets noun -и run.
                 '{t}{y}'
-                    ( not ('{n}' or '{e}' or '{o}' or '{i}{s}' or '{y}{s}') delete )
+                    ( not found_ty_noun delete )
           )
         )
     )
@@ -627,7 +619,7 @@ backwardmode (
             // stem matches the base noun and its -ізм/-іст derivatives
             // (акварельний → акварел = акварель, соціальний → соціал = соціалізм)
             '{'}{n}'
-            '{s}{'}{k}'           // -ськ (козацький → козац)
+            '{s}{'}{k}'           // -ськ (український → україн)
             '{z}{'}{k}'           // -зьк
             '{u}{v}{a}{t}'        // -уват
             '{o}{v}{a}{t}'        // -оват
@@ -801,6 +793,14 @@ define stem as (
         '{m}{a}{t}{e}{r}{i}{ie}{iu}'        (<- '{m}{a}{t}{e}{r}{i}')      // матерією
         // досить (enough) is an adverb, not the 3rd person of a verb
         '{d}{o}{s}{y}{t}{'}'                (<- '{d}{o}{s}{y}{t}{'}')      // досить
+        // The frequent infinitives in -кти and -рти, which the -ти guard
+        // otherwise reads as noun plurals (факти, карти)
+        '{v}{t}{e}{k}{t}{y}'                (<- '{v}{t}{e}{k}')            // втекти
+        '{u}{t}{e}{k}{t}{y}'                (<- '{u}{t}{e}{k}')            // утекти
+        '{p}{o}{m}{e}{r}{t}{y}'             (<- '{p}{o}{m}{e}{r}')         // померти
+        // новела keeps its -ла: -вела is otherwise a past tense (привела)
+        '{n}{o}{v}{e}{l}{a}'                (<- '{n}{o}{v}{e}{l}')         // новела
+        '{n}{o}{v}{e}{l}{y}'                (<- '{n}{o}{v}{e}{l}')         // новели
         // Genitive plurals in -ей whose stem differs from the other forms:
         // статей (стаття → статт) would meet стать; сімей (сім'я → сім')
         // would meet the numeral сім
@@ -1043,10 +1043,15 @@ define stem as (
         '{d}{o}{t}{e}{p}{e}{r}'             // дотепер
         // Nouns whose genitive plural or nominative would be read as a verb
         // form or hit an alternation rule: справ, держав (not past tense),
-        // Сибір (Сибіру, not -бір/-бор)
+        // Сибір (Сибіру, not -бір/-бор), вплив, посів, архів, масив (the
+        // -в of a 5-letter word goes as a past tense: почав, забив)
         '{s}{p}{r}{a}{v}'                   // справ
         '{d}{e}{r}{zh}{a}{v}'               // держав
         '{s}{y}{b}{i}{r}'                   // Сибір
+        '{v}{p}{l}{y}{v}'                   // вплив
+        '{p}{o}{s}{i}{v}'                   // посів
+        '{a}{r}{kh}{i}{v}'                  // архів
+        '{m}{a}{s}{y}{v}'                   // масив
       )
     )
     or
@@ -1073,7 +1078,48 @@ define stem as (
                 '{h}{i}{s}{t}{'}' (atlimit <- '{h}{o}{s}{t}')   // гість
                 '{p}{l}{i}{d}'    (atlimit <- '{p}{l}{o}{d}')   // плід
                 '{r}{i}{d}'       (atlimit <- '{r}{o}{d}')      // рід
+                '{b}{i}{k}'       (atlimit <- '{b}{o}{k}')      // бік
+                '{k}{i}{t}'       (atlimit <- '{k}{o}{t}')      // кіт
+                '{r}{i}{h}'       (atlimit <- '{r}{o}{h}')      // ріг
+                '{s}{i}{k}'       (atlimit <- '{s}{o}{k}')      // сік
             )
+        ) )
+        // Guards for the verb endings -ла/-ли/-ло and -ти, tested on the
+        // whole word (after an optional -ся/-сь) so that the letter before
+        // the ending is seen in 5-letter words too, where it sits outside
+        // pV (школа → школ, число → числ, карти → карт, факти → факт).
+        //
+        // -ла/-ли/-ло is not a past tense after о (Микола, школа, апостоли,
+        // навколо: nouns far outnumber verbs like виборола), after л, т, д
+        // (Михайло, Абдулла, світло, сідло: no verb has these before the
+        // ending), or after е unless -вело (весело, ремесло are not verbs;
+        // призвело, привело are). -ороли/-орола are the one verb family
+        // behind о (бороли, виборола), so о only guards when not preceded
+        // by р; стала/стали/стало are the past of стати, so т does not
+        // guard the bare с.
+        //
+        // -ти is not an infinitive after н, е, о, іс, ис (документи,
+        // портрети, роботи, спеціалісти, листи), nor after к, р, ш, ф, х,
+        // п, б, в, л, м, т, ь, ю, є (пункти, карти, кошти, нафти, шахти,
+        // рецепти, хребти, астронавти, Ялти, Мальти, валюти, дієти): the
+        // infinitives in -кти and -рти (втекти, померти) are listed as
+        // exceptions, the rest are rare (текти, стерти, гребти, пливти).
+        unset found_la_noun
+        unset found_ty_noun
+        do ( backwards (
+            // the same reflexive endings as the reflexive rule removes
+            try ( among ( '{t}{y}{s}{ia}' '{t}{y}{s}{'}' '{l}{a}{s}{'}'
+                          '{v}{s}{ia}' '{v}{s}{'}' '{s}{ia}' '{s}{'}' ) )
+            ( ( ( '{l}{a}' or '{l}{y}' or '{l}{o}' )
+                ( ( '{o}' not '{r}' ) or '{l}' or ( '{t}' not ( '{s}' atlimit ) )
+                  or '{d}' or ( '{e}' not '{v}' ) )
+                set found_la_noun )
+              or
+              ( '{t}{y}'
+                ( '{n}' or '{e}' or '{o}' or '{i}{s}' or '{y}{s}'
+                  or '{k}' or '{r}' or '{sh}' or '{f}' or '{kh}' or '{p}' or '{b}'
+                  or '{v}' or '{l}' or '{m}' or '{t}' or '{'}' or '{iu}' or '{ie}' )
+                set found_ty_noun ) )
         ) )
         unset found_diminutive
         unset found_professional
