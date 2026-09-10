@@ -362,6 +362,22 @@ backwardmode (
                     // found_ia: these are verb forms, so professional must
                     // not read the root as an agent noun (проникає → проник)
                     (set found_ia delete)
+                // Genitive plural -ей of consonant-stem nouns (дітей → діт,
+                // областей → област, цілей → ціл, коней → кон, грошей →
+                // грош): after т, ч, ш, щ, м, н, л the ending goes. After
+                // any other letter the е belongs to the stem of an -ей/-ея
+                // noun (трофей, трофею → трофе; ідея, ідей → іде) and only
+                // й goes, as for the imperative above. In a 5-letter word
+                // the letter sits outside pV and cannot be tested (atlimit):
+                // the ending goes, as дітей, цілей, коней, ролей, речей far
+                // outnumber музей, ліцей, хокей, which are listed as
+                // exceptions.
+                '{e}{i`}'
+                    ( set found_ia
+                      ( ( (atlimit or '{t}' or '{ch}' or '{sh}' or '{shch}'
+                           or '{m}' or '{n}' or '{l}')
+                          delete )
+                        or (<- '{e}') ) )
                 // Past masc -ав/-ів/-ив: also the genitive plural of nouns
                 // (працівників), so professional may still follow
                 '{a}{v}' '{i}{v}' '{y}{v}'
@@ -785,6 +801,36 @@ define stem as (
         '{m}{a}{t}{e}{r}{i}{ie}{iu}'        (<- '{m}{a}{t}{e}{r}{i}')      // матерією
         // досить (enough) is an adverb, not the 3rd person of a verb
         '{d}{o}{s}{y}{t}{'}'                (<- '{d}{o}{s}{y}{t}{'}')      // досить
+        // Genitive plurals in -ей whose stem differs from the other forms:
+        // статей (стаття → статт) would meet стать; сімей (сім'я → сім')
+        // would meet the numeral сім
+        '{s}{t}{a}{t}{e}{i`}'               (<- '{s}{t}{a}{t}{t}')         // статей
+        '{s}{i}{m}{e}{i`}'                  (<- '{s}{i}{m}{ap}')           // сімей
+        // Names and nouns in -ей after т, м, н, л, or too short for the
+        // letter to be tested, where -ей is otherwise the genitive plural
+        // ending: the е stays, as in their other forms (музею → музе)
+        '{m}{u}{z}{e}{i`}'                  (<- '{m}{u}{z}{e}')            // музей
+        '{l}{i}{ts}{e}{i`}'                 (<- '{l}{i}{ts}{e}')           // ліцей
+        '{kh}{o}{k}{e}{i`}'                 (<- '{kh}{o}{k}{e}')           // хокей
+        '{ie}{v}{r}{e}{i`}'                 (<- '{ie}{v}{r}{e}')           // єврей
+        '{i}{ie}{r}{e}{i`}'                 (<- '{i}{ie}{r}{e}')           // ієрей
+        '{o}{r}{f}{e}{i`}'                  (<- '{o}{r}{f}{e}')            // Орфей
+        '{t}{a}{d}{e}{i`}'                  (<- '{t}{a}{d}{e}')            // Тадей
+        '{m}{a}{ts}{e}{i`}'                 (<- '{m}{a}{ts}{e}')           // Мацей
+        '{p}{r}{o}{m}{e}{t}{e}{i`}'         (<- '{p}{r}{o}{m}{e}{t}{e}')   // Прометей
+        '{m}{a}{t}{e}{i`}'                  (<- '{m}{a}{t}{e}')            // Матей
+        '{p}{t}{o}{l}{e}{m}{e}{i`}'         (<- '{p}{t}{o}{l}{e}{m}{e}')   // Птолемей
+        '{s}{i}{d}{n}{e}{i`}'               (<- '{s}{i}{d}{n}{e}')         // Сідней
+        '{d}{i}{s}{n}{e}{i`}'               (<- '{d}{i}{s}{n}{e}')         // Дісней
+        '{b}{r}{u}{n}{e}{i`}'               (<- '{b}{r}{u}{n}{e}')         // Бруней
+        '{e}{n}{e}{i`}'                     (<- '{e}{n}{e}')               // Еней
+        '{i}{r}{y}{n}{e}{i`}'               (<- '{i}{r}{y}{n}{e}')         // Іриней
+        '{iu}{v}{i}{l}{e}{i`}'              (<- '{iu}{v}{i}{l}{e}')        // ювілей
+        '{p}{r}{y}{v}{i}{l}{e}{i`}'         (<- '{p}{r}{y}{v}{i}{l}{e}')   // привілей
+        '{k}{l}{e}{i`}'                     (<- '{k}{l}{e}')               // клей
+        '{m}{a}{v}{z}{o}{l}{e}{i`}'         (<- '{m}{a}{v}{z}{o}{l}{e}')   // мавзолей
+        '{d}{y}{s}{p}{l}{e}{i`}'            (<- '{d}{y}{s}{p}{l}{e}')      // дисплей
+        '{h}{a}{l}{i}{l}{e}{i`}'            (<- '{h}{a}{l}{i}{l}{e}')      // Галілей
         // Numerals in -яти whose с/апостроф sits outside pV, so the -яти
         // guard cannot see it (десяти → десят as десять)
         '{d}{e}{s}{ia}{t}{y}'               (<- '{d}{e}{s}{ia}{t}')        // десяти
