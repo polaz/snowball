@@ -440,6 +440,13 @@ backwardmode (
             '{i}{s}{t}'           // -іст
             '{y}{shch}'           // -ищ
                 (delete)
+            // -ельн after в: adjectives of -івля/-овля nouns (будівля →
+            // будівельний, торгівля → торговельний). The whole suffix goes so
+            // the stem matches the noun (будів, торгов); every в+ельн lexeme
+            // in the corpus follows this pattern. Elsewhere -ельн is -ель + ьн
+            // (акварельний, корабельний) and only ьн goes.
+            '{e}{l}{'}{n}'
+                ( ('{v}' delete) or (<- '{e}{l}') )
         )
     )
 
