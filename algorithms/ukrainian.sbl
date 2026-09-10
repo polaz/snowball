@@ -70,7 +70,7 @@ externals ( stem )
 
 integers ( pV p2 )
 
-booleans ( found_diminutive found_professional )
+booleans ( found_diminutive found_professional found_ia )
 
 groupings ( v )
 
@@ -140,6 +140,12 @@ backwardmode (
                 '{a}{ts}{i}{i`}{n}{a}'        // -аційна
                 '{a}{ts}{i}{i`}{n}{e}'        // -аційне
                 '{a}{ts}{i}{i`}{n}{i}'        // -аційні
+                '{a}{ts}{i}{i`}{n}{o}'        // -аційно (adverb)
+                '{a}{ts}{i}{i`}{n}{u}'        // -аційну
+                '{a}{ts}{i}{i`}{n}{i}{s}{t}{'}'       // -аційність
+                '{a}{ts}{i}{i`}{n}{o}{s}{t}{i}'       // -аційності
+                '{a}{ts}{i}{i`}{n}{i}{s}{t}{iu}'      // -аційністю
+                '{a}{ts}{i}{i`}{n}{o}{s}{t}{e}{i`}'   // -аційностей
 
                 // -ічн-/-ичн- (лінгвістичний, історичний, логічний)
                 '{i}{ch}{n}{y}{m}{y}'         // -ічними
@@ -154,6 +160,12 @@ backwardmode (
                 '{i}{ch}{n}{a}'               // -ічна
                 '{i}{ch}{n}{e}'               // -ічне
                 '{i}{ch}{n}{i}'               // -ічні
+                '{i}{ch}{n}{o}'               // -ічно (adverb)
+                '{i}{ch}{n}{u}'               // -ічну
+                '{i}{ch}{n}{i}{s}{t}{'}'      // -ічність
+                '{i}{ch}{n}{o}{s}{t}{i}'      // -ічності
+                '{i}{ch}{n}{i}{s}{t}{iu}'     // -ічністю
+                '{i}{ch}{n}{o}{s}{t}{e}{i`}'  // -ічностей
                 '{y}{ch}{n}{y}{m}{y}'         // -ичними
                 '{y}{ch}{n}{o}{h}{o}'         // -ичного
                 '{y}{ch}{n}{o}{m}{u}'         // -ичному
@@ -166,6 +178,12 @@ backwardmode (
                 '{y}{ch}{n}{a}'               // -ична
                 '{y}{ch}{n}{e}'               // -ичне
                 '{y}{ch}{n}{i}'               // -ичні
+                '{y}{ch}{n}{o}'               // -ично (adverb)
+                '{y}{ch}{n}{u}'               // -ичну
+                '{y}{ch}{n}{i}{s}{t}{'}'      // -ичність
+                '{y}{ch}{n}{o}{s}{t}{i}'      // -ичності
+                '{y}{ch}{n}{i}{s}{t}{iu}'     // -ичністю
+                '{y}{ch}{n}{o}{s}{t}{e}{i`}'  // -ичностей
 
                 // -ійн- (комерційний, традиційний)
                 '{i}{i`}{n}{y}{m}{y}'         // -ійними
@@ -180,6 +198,12 @@ backwardmode (
                 '{i}{i`}{n}{a}'               // -ійна
                 '{i}{i`}{n}{e}'               // -ійне
                 '{i}{i`}{n}{i}'               // -ійні
+                '{i}{i`}{n}{o}'               // -ійно (adverb)
+                '{i}{i`}{n}{u}'               // -ійну
+                '{i}{i`}{n}{i}{s}{t}{'}'      // -ійність
+                '{i}{i`}{n}{o}{s}{t}{i}'      // -ійності
+                '{i}{i`}{n}{i}{s}{t}{iu}'     // -ійністю
+                '{i}{i`}{n}{o}{s}{t}{e}{i`}'  // -ійностей
 
                 // -уальн- (інтелектуальний, віртуальний, актуальний)
                 '{u}{a}{l}{'}{n}{y}{m}{y}'    // -уальними
@@ -194,7 +218,16 @@ backwardmode (
                 '{u}{a}{l}{'}{n}{a}'          // -уальна
                 '{u}{a}{l}{'}{n}{e}'          // -уальне
                 '{u}{a}{l}{'}{n}{i}'          // -уальні
-                    (R2 delete)
+                '{u}{a}{l}{'}{n}{o}'          // -уально (adverb)
+                '{u}{a}{l}{'}{n}{u}'          // -уальну
+                '{u}{a}{l}{'}{n}{i}{s}{t}{'}'     // -уальність
+                '{u}{a}{l}{'}{n}{o}{s}{t}{i}'     // -уальності
+                '{u}{a}{l}{'}{n}{i}{s}{t}{iu}'    // -уальністю
+                '{u}{a}{l}{'}{n}{o}{s}{t}{e}{i`}' // -уальностей
+                    // found_ia: a derivational suffix is gone, what is left is
+                    // the root; professional must not strip -ар/-ник from it
+                    // (деклараційний → деклар as декларація, not декл)
+                    (R2 set found_ia delete)
 
                 // -аці- noun forms (інформація, організація — before verb -ію intercepts)
                 '{a}{ts}{i}{ia}{m}{y}'        // -аціями
@@ -204,7 +237,22 @@ backwardmode (
                 '{a}{ts}{i}{iu}'              // -ацію
                 '{a}{ts}{i}{ia}'              // -ація
                 '{a}{ts}{i}{yi}'              // -ації (gen/dat/loc — ї=U+0457)
-                    (R2 delete)
+                // other -ія nouns: the -і- stem marker goes with the ending
+                // (академія → академ = академічний, географія → географ)
+                '{i}{ia}{m}{y}'               // -іями
+                '{i}{ia}{kh}'                 // -іях
+                '{i}{ia}{m}'                  // -іям
+                '{i}{ie}{iu}'                 // -ією (inst)
+                '{i}{ie}{m}'                  // -ієм (inst of -ій: критерієм, анатолієм)
+                '{i}{i`}'                     // -ій (nom of -ій nouns and gen pl of -ія: вікарій, італій)
+                '{i}{iu}'                     // -ію
+                '{i}{ia}'                     // -ія
+                '{i}{yi}'                     // -ії
+                '{i}{a}'                      // -іа (transliteration variant: вікімедіа)
+                    // found_ia: the remaining stem is a noun root, so the
+                    // professional pass must not strip -ар/-ник from it
+                    // (Баварія → бавар as баварський, not бав)
+                    (R2 set found_ia delete)
             )
         )
         or
@@ -420,7 +468,15 @@ backwardmode (
             // (національність → націонал = національний).
             '{'}{n}{i}{s}{t}{'}'  // -ьність
             '{o}{v}{i}{s}{t}{'}'  // -овість (промисловість → промисл = промисловий)
+            // -ованість: abstract nouns of -ований participles; the whole
+            // suffix goes so they meet the verb (організованість → організ =
+            // організований)
+            '{o}{v}{a}{n}{i}{s}{t}{'}'    // -ованість
             '{i}{s}{t}{'}'        // -ість
+
+            // -ован left by noun -ості/-остей on -ованість
+            // (організованості → організован → організ, as організованість)
+            '{o}{v}{a}{n}'        // -ован
 
             // Adjectival derivational
             // -ьн: strip only the soft sign + н of -льн- adjectives so the
@@ -447,6 +503,21 @@ backwardmode (
             // (акварельний, корабельний) and only ьн goes.
             '{e}{l}{'}{n}'
                 ( ('{v}' delete) or (<- '{e}{l}') )
+            // -альн after -ув-/-юв-: deverbal adjectives of -увати verbs
+            // (лікувальний, рятувальний, обчислювальний). The whole suffix
+            // goes so the stem meets the verb and its -ування noun
+            // (лікув = лікувати, лікування). Elsewhere only ьн goes.
+            '{a}{l}{'}{n}'
+                ( (('{u}{v}' or '{iu}{v}') delete) or (<- '{a}{l}') )
+            // -аність after -ув-/-юв-: abstract nouns of -уваний participles
+            // (засвоюваність → засвоюв = засвоювати). Elsewhere it is
+            // -ан + ість (вихованість → вихован = вихована).
+            '{a}{n}{i}{s}{t}{'}'
+                ( (('{u}{v}' or '{iu}{v}') delete) or (<- '{a}{n}') )
+            // -ан left by noun -ості/-остей on -уваність
+            // (відвідуваності → відвідуван → відвідув, as відвідуваність)
+            '{a}{n}'
+                ( ('{u}{v}' or '{iu}{v}') delete )
         )
     )
 
@@ -459,6 +530,12 @@ backwardmode (
 
     define tidy_up as (
         [substring] among (
+            // Comparative -іш uncovered by derivational (-іш-ов, -іш-ськ in
+            // surnames: Кулішова → куліш → кул)
+            '{i}{sh}'
+               (delete
+                ['{n}'] '{n}' delete
+               )
             // Consonant alternations in verbs
             '{l}'
                ('{b}' or '{p}' or '{v}' or '{m}' delete)
@@ -490,12 +567,19 @@ define stem as (
     ( [substring] atlimit among (
         '{v}{a}{r}{t}{o}{s}{t}{i}'          (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартості
         '{v}{a}{r}{t}{o}{s}{t}{e}{i`}'      (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартостей
+        // матерія (matter) would meet матері (of мати, mother) after -ія
+        // removal; keep the -і stem it had before the -ія rule.
+        '{m}{a}{t}{e}{r}{i}{ia}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерія
+        '{m}{a}{t}{e}{r}{i}{yi}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерії
+        '{m}{a}{t}{e}{r}{i}{iu}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерію
+        '{m}{a}{t}{e}{r}{i}{ie}{iu}'        (<- '{m}{a}{t}{e}{r}{i}')      // матерією
       )
     )
     or
     (
         unset found_diminutive
         unset found_professional
+        unset found_ia
         mark_regions // signals 'f' if input < 3 characters
         backwards setlimit tomark pV for (
             do (
@@ -514,7 +598,7 @@ define stem as (
 
             // Professional suffixes (after noun declension removed)
             // Skip if diminutive already fired (prevents -ач removal on собач- from собаченітко)
-            not found_diminutive not found_professional try professional
+            not found_diminutive not found_professional do ( not found_ia professional )
 
             do comparative
 
