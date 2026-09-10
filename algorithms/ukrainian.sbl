@@ -104,6 +104,19 @@ backwardmode (
             '{y}{v}{sh}{y}'
             '{y}{v}{sh}{y}{s}{'}'
                 (delete)
+            // Present gerunds (дієприслівники недоконаного виду), removed
+            // with the thematic vowel so they meet the other verb forms:
+            // включаючи → включ (включати), виходячи → виход (виходити),
+            // розуміючи → розум (розуміти), кажучи → каж (кажуть)
+            '{a}{iu}{ch}{y}' '{ia}{iu}{ch}{y}' '{i}{iu}{ch}{y}'
+            '{u}{ch}{y}' '{ia}{ch}{y}' '{a}{ch}{y}'
+                (set found_verb delete)
+            // -уючи/-юючи → -ув/-юв, as the present tense of -увати verbs
+            // (використовуючи → використовув → використ)
+            '{u}{iu}{ch}{y}'
+                (set found_verb <- '{u}{v}')
+            '{iu}{iu}{ch}{y}'
+                (set found_verb <- '{iu}{v}')
         )
     )
 
