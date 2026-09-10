@@ -412,9 +412,13 @@ backwardmode (
 
     define derivational as (
         setlimit tomark p2 for ([substring]) among (
-            // Quality/abstract
-            '{n}{i}{s}{t}{'}'     // -ність
-            '{o}{v}{i}{s}{t}{'}'  // -овість
+            // Quality/abstract. -ість keeps the adjectival н so the noun
+            // stems like its adjective and its -ості/-істю forms
+            // (активність → активн = активна, активності). After ь the
+            // whole -ьність goes, matching the -ьн rule below
+            // (національність → націонал = національний).
+            '{'}{n}{i}{s}{t}{'}'  // -ьність
+            '{o}{v}{i}{s}{t}{'}'  // -овість (промисловість → промисл = промисловий)
             '{i}{s}{t}{'}'        // -ість
 
             // Adjectival derivational
