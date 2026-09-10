@@ -70,7 +70,7 @@ externals ( stem )
 
 integers ( pV p2 )
 
-booleans ( found_diminutive found_professional found_ia )
+booleans ( found_diminutive found_professional found_ia found_verb )
 
 groupings ( v )
 
@@ -270,6 +270,7 @@ backwardmode (
                 '{u}{ch}{e}' '{iu}{ch}{e}'                    // -уче/-юче
                 '{u}{ch}{i}' '{iu}{ch}{i}'                    // -учі/-ючі
 
+                '{i}{sh}{u}'                             // Comparative acc fem (старішу), kept from verb -у
                 '{yi}{m}{y}' '{i}{m}{y}' '{y}{m}{y}'    // Instrumental plural
                 '{'}{o}{yi}'                             // Genitive singular fem (soft) e.g. синьої
                 '{'}{o}{h}{o}'                          // Genitive singular masc/neut (soft) e.g. синього
@@ -319,24 +320,43 @@ backwardmode (
                 '{ie}{m}'                       // Present 1st pl short
                 // Note: -{y}{m} (-им) removed — adj standard ending '{y}{m}' (instr.sg/dat.pl)
                 // always fires first, so verb -им is unreachable
-                '{l}{a}' '{l}{y}' '{l}{o}'      // Past tense (others)
+                '{y}{t}{'}' '{yi}{t}{'}'        // Present 3rd sg (робить, стоїть)
                 '{ie}{sh}' '{e}{sh}' '{y}{sh}'  // Present 2nd sg (знаєш, живеш, робиш)
                 '{ie}'                          // Present 3rd sg/future
                 '{i`}'                          // Imperative sg
-                '{u}'                           // Present 1st sg (fallback)
                 '{v}'                           // Past masc (fallback)
                     (delete)
+                // Present 1st sg -у (fallback), but not after -ств: -ству is
+                // the dative of -ство nouns (товариству), left for noun.
+                '{u}'
+                    ( not '{s}{t}{v}' delete )
+                // Past tense -ла/-ли/-ло, but not after о (Микола, школа,
+                // апостоли, навколо: nouns far outnumber verbs like виборола),
+                // not after л, т, д (Михайло, Абдулла, світло, сідло: no verb
+                // has these before the ending), and -ло not after е unless
+                // -вело (весело, ремесло are not verbs; призвело, привело
+                // are). Consonant-stem verbs keep the plain ending (могли,
+                // вийшло, принесла). A letter outside pV cannot be tested, so
+                // 5-letter words (стали, школа) are treated as before.
+                // -ороли/-орола are the one verb family behind о (бороли,
+                // виборола), so о only guards when not preceded by р.
+                '{l}{a}' '{l}{y}'
+                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}') delete )
+                '{l}{o}'
+                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}' or ('{e}' not '{v}')) delete )
                 // Present 1st sg -ю (fallback), but not after -іст: -істю is
                 // the instrumental of -ість abstract nouns (активністю), which
                 // noun maps back to -ість so it stems like the nominative.
                 '{iu}'
                     ( not '{i}{s}{t}' delete )
-                // Infinitive -ти (fallback), but skip -нти: Ukrainian has no
-                // infinitive ending in -нти, so -нти is always a noun plural
-                // (документи, моменти, студенти). Deleting -ти there over-stems
-                // (документи→докумен); the guard lets noun -и run instead.
+                // Infinitive -ти (fallback), but not after н, е or о: no
+                // Ukrainian infinitive ends in -нти/-ети, and the only -оти
+                // infinitives (бороти, побороти) are rare next to the noun
+                // plurals документи, портрети, роботи, повороти. The guard
+                // lets noun -и run. (-кти cannot be guarded: втекти and
+                // факти both have the к inside pV.)
                 '{t}{y}'
-                    ( not '{n}' delete )
+                    ( not ('{n}' or '{e}' or '{o}') delete )
           )
         )
     )
@@ -349,7 +369,16 @@ backwardmode (
         // wide mode, so a numeric cursor test would stem inconsistently).
         // Verb handles -остей (ends in -й), so the -{o}{s}{t}{e}{i`} entry
         // here is removed (unreachable).
-        ( ['{o}{s}{t}{i}'] not atlimit delete )
+        // -ість/-істю/-істі share the guard so the whole paradigm stems alike
+        // (кількість = кількості = кількістю → кільк, повість = повісті).
+        ( [substring] among (
+                '{o}{s}{t}{i}'      // -ості
+                '{i}{s}{t}{'}'      // -ість
+                '{i}{s}{t}{iu}'     // -істю
+                '{i}{s}{t}{i}'      // -істі (underived nouns: повісті)
+                    (not atlimit delete)
+          )
+        )
         or
         ( [substring] among (
                 // -істю: instrumental sg of -ість abstract nouns. Restore the
@@ -364,6 +393,15 @@ backwardmode (
                 // Collective/abstract nouns (specific, safe without R2)
                 '{s}{t}{v}{o}'            // -ство (багатство→багат)
                 '{t}{v}{o}'              // -тво (words in -цтво like козацтво match -ство above)
+                // oblique cases of -ство (авторства, суспільстві, мистецтвом)
+                '{s}{t}{v}{a}' '{s}{t}{v}{u}' '{s}{t}{v}{i}' '{s}{t}{v}{o}{m}'
+                '{s}{t}{v}{a}{m}' '{s}{t}{v}{a}{m}{y}' '{s}{t}{v}{a}{kh}'
+                    (delete)
+                // oblique cases of -цтво keep the ц (козацтва → козац)
+                '{ts}{t}{v}{a}' (<- '{ts}') '{ts}{t}{v}{u}' (<- '{ts}')
+                '{ts}{t}{v}{i}' (<- '{ts}') '{ts}{t}{v}{o}{m}' (<- '{ts}')
+                '{ts}{t}{v}{a}{m}' (<- '{ts}')
+                '{ts}{t}{v}{a}{m}{y}' (<- '{ts}') '{ts}{t}{v}{a}{kh}' (<- '{ts}')
 
                 '{ia}{m}{y}' '{a}{m}{y}'        // Instrumental plural
                 '{ia}{kh}' '{a}{kh}'            // Locative plural
@@ -455,7 +493,19 @@ backwardmode (
             '{ia}{n}{n}{ia}'       // -яння
             '{i}{n}{n}{ia}'        // -іння
             '{e}{n}{n}{ia}'        // -ення
-                (delete)
+            // oblique cases of the same nouns: -нню (dat), -нням (inst),
+            // -ннями, -ннях (адмініструванням → адмініструв). Locative -нні
+            // is left out: it is also the plural of -нний adjectives
+            // (нечисленні, дорогоцінні).
+            '{a}{n}{n}{iu}' '{a}{n}{n}{ia}{m}' '{a}{n}{n}{ia}{m}{y}' '{a}{n}{n}{ia}{kh}'
+            '{ia}{n}{n}{iu}' '{ia}{n}{n}{ia}{m}' '{ia}{n}{n}{ia}{m}{y}' '{ia}{n}{n}{ia}{kh}'
+            '{i}{n}{n}{iu}' '{i}{n}{n}{ia}{m}' '{i}{n}{n}{ia}{m}{y}' '{i}{n}{n}{ia}{kh}'
+            '{e}{n}{n}{iu}' '{e}{n}{n}{ia}{m}' '{e}{n}{n}{ia}{m}{y}' '{e}{n}{n}{ia}{kh}'
+                // found_verb: the verb root is left, so comparative and
+                // tidy_up must not read a final -іш as a comparative
+                // (вирішення → виріш = вирішити, not вир); found_ia keeps
+                // professional off it (проникання → проник, not про)
+                (set found_ia set found_verb delete)
         )
     )
 
@@ -533,7 +583,7 @@ backwardmode (
             // Comparative -іш uncovered by derivational (-іш-ов, -іш-ськ in
             // surnames: Кулішова → куліш → кул)
             '{i}{sh}'
-               (delete
+               (not found_verb delete
                 ['{n}'] '{n}' delete
                )
             // Consonant alternations in verbs
@@ -567,12 +617,28 @@ define stem as (
     ( [substring] atlimit among (
         '{v}{a}{r}{t}{o}{s}{t}{i}'          (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартості
         '{v}{a}{r}{t}{o}{s}{t}{e}{i`}'      (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартостей
+        '{v}{a}{r}{t}{i}{s}{t}{'}'          (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартість
+        '{v}{a}{r}{t}{i}{s}{t}{iu}'         (<- '{v}{a}{r}{t}{o}{s}{t}')   // вартістю
+        // совість (conscience) would meet сова (owl) after -ість removal
+        '{s}{o}{v}{i}{s}{t}{'}'             (<- '{s}{o}{v}{i}{s}{t}')      // совість
+        '{s}{o}{v}{i}{s}{t}{i}'             (<- '{s}{o}{v}{i}{s}{t}')      // совісті
+        '{s}{o}{v}{i}{s}{t}{iu}'            (<- '{s}{o}{v}{i}{s}{t}')      // совістю
+        // Fleeting-vowel and consonant alternations in the most frequent
+        // nouns, which no suffix rule can reach: рік/року/році, Київ/Києва,
+        // особа/осіб, люди/людей
+        '{r}{i}{k}'                         (<- '{r}{o}{k}')               // рік
+        '{r}{o}{ts}{i}'                     (<- '{r}{o}{k}')               // році
+        '{k}{y}{yi}{v}'                     (<- '{k}{y}{ie}{v}')           // Київ
+        '{o}{s}{i}{b}'                      (<- '{o}{s}{o}{b}')            // осіб
+        '{l}{iu}{d}{e}{i`}'                 (<- '{l}{iu}{d}')              // людей
         // матерія (matter) would meet матері (of мати, mother) after -ія
         // removal; keep the -і stem it had before the -ія rule.
         '{m}{a}{t}{e}{r}{i}{ia}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерія
         '{m}{a}{t}{e}{r}{i}{yi}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерії
         '{m}{a}{t}{e}{r}{i}{iu}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерію
         '{m}{a}{t}{e}{r}{i}{ie}{iu}'        (<- '{m}{a}{t}{e}{r}{i}')      // матерією
+        // досить (enough) is an adverb, not the 3rd person of a verb
+        '{d}{o}{s}{y}{t}{'}'                (<- '{d}{o}{s}{y}{t}{'}')      // досить
       )
     )
     or
@@ -580,6 +646,7 @@ define stem as (
         unset found_diminutive
         unset found_professional
         unset found_ia
+        unset found_verb
         mark_regions // signals 'f' if input < 3 characters
         backwards setlimit tomark pV for (
             do (
@@ -588,7 +655,9 @@ define stem as (
                    ( verbal_noun or
                      ( try ( ( professional (set found_professional) )
                              or ( diminutive (set found_diminutive) ) )
-                       not found_professional ( adjective or verb or noun )
+                       // found_verb: a verb stem may end in -іш (вирішити →
+                       // виріш); comparative must leave it alone
+                       not found_professional ( adjective or (verb set found_verb) or noun )
                      )
                    )
                  )
@@ -600,7 +669,7 @@ define stem as (
             // Skip if diminutive already fired (prevents -ач removal on собач- from собаченітко)
             not found_diminutive not found_professional do ( not found_ia professional )
 
-            do comparative
+            do ( not found_verb comparative )
 
             // Derivational suffixes (in R2 only)
             do derivational
