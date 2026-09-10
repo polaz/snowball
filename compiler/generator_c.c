@@ -1,17 +1,69 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h> /* for fprintf etc */
 #include <stdlib.h> /* for exit */
 #include <string.h> /* for strlen */
 #include "header.h"
 
+// C90 guarantees 31 significant initial characters in an internal identifier.
+#define C_MAX_ID_LEN 31
+
 /* Define this to get warning messages when optimisations can't be used. */
 /* #define OPTIMISATION_WARNINGS */
+
+// Show how sparse the N-way dispatches in the among tables are:
+// #define REPORT_SPARSE_AMONG_NWAYS
+
+// Flag bit in among result codes which indicates an "Among Function Scenario".
+#define AFS_FLAG 0x4000
 
 /* prototype functions for recursive use: */
 
 static void generate(struct generator * g, struct node * p);
 static void w(struct generator * g, const char * s);
 static void writef(struct generator * g, const char * s, struct node * p);
+
+static bool can_error_(struct node * p);
+
+// `can_error(routine_name)` returns true if the C implementation of
+// `routine_name` can return -1.  -1 indicates an internal or system type error
+// (e.g. memory allocation failed or the slice wasn't valid) for C (for C++
+// we instead throw exceptions for such cases).
+static bool can_error(struct name * n) {
+    return can_error_(n->definition->left);
+}
+
+static bool can_error_(struct node * p) {
+    while (p) {
+        switch (p->type) {
+            case c_sliceto:
+            case c_assignto:
+            case c_slicefrom:
+            case c_attach:
+            case c_insert:
+            case c_stringassign:
+                return true;
+            case c_call:
+                // Recursive functions are rare so just assume the worst.
+                if (p->name->recursive) return true;
+                if (can_error(p->name)) return true;
+                break;
+            case c_among: {
+                struct among * x = p->among;
+                if (x->unique_function_count == 0) break;
+                for (int i = 0; i < x->literalstring_count; ++i) {
+                    struct name * function = x->v[i].function;
+                    if (function && can_error(function)) return true;
+                }
+                break;
+            }
+        }
+        if (p->left && can_error_(p->left)) return true;
+        if (p->aux && can_error_(p->aux)) return true;
+        p = p->right;
+    }
+    return false;
+}
 
 /* Write routines for items from the syntax tree */
 
@@ -38,6 +90,31 @@ static void write_varname(struct generator * g, struct name * p) {
          */
         write_char(g, "sbirxg"[p->type]);
         write_char(g, '_');
+        if (g->options->target_lang == LANG_C) {
+            if (SIZE(p->s) > C_MAX_ID_LEN - 2) {
+                // We aim to generate C90 code, and C90 only guarantees 31
+                // significant initial characters in internal identifiers.
+                // C99 raised this to 63, and modern implementations are
+                // likely to have a high limit or not impose one, but it
+                // is easy to generate an identifier based on the number
+                // instead.  A Snowball name must start with a letter so
+                // this can't collide.
+                write_int(g, p->count);
+                return;
+            }
+        } else {
+            assert(g->options->target_lang == LANG_CPLUSPLUS);
+            for (int i = SIZE(p->s) - 1; i > 0; --i) {
+                if (p->s[i] == '_' && p->s[i - 1] == '_') {
+                    // C++ reserves identifiers containing a double underscore
+                    // so generate an identifier based on the number instead.
+                    // A Snowball name must start with a letter so this can't
+                    // collide.
+                    write_int(g, p->count);
+                    return;
+                }
+            }
+        }
     }
     write_s(g, p->s);
 }
@@ -60,31 +137,99 @@ static void wlitch(struct generator * g, int ch) {
         write_char(g, ch);
         write_char(g, '\'');
     } else {
-        write_string(g, "0x"); write_hex(g, ch);
+        write_string(g, "0x");
+        write_hex(g, ch);
     }
 }
 
-static void wlitarray(struct generator * g, symbol * p) {  /* write literal array */
-    write_string(g, "{ ");
+static void wlitarray(struct generator * g, const symbol * p) {  /* write literal array */
+    if (SIZE(p) <= 8) {
+        // Short literals are common (even after string pooling) so write them
+        // on one line to improve readability of the generated code.
+        write_string(g, "{ ");
+        for (int i = 0; i < SIZE(p); i++) {
+            if (i) write_string(g, ", ");
+            wlitch(g, p[i]);
+        }
+        write_string(g, " }");
+        return;
+    }
+
+    w(g, "{~N~+~M");
     for (int i = 0; i < SIZE(p); i++) {
-        if (i) write_string(g, ", ");
+        if (i % 8 == 0) {
+            if (i) w(g, ",~N~M");
+        } else {
+            write_string(g, ", ");
+        }
         wlitch(g, p[i]);
     }
-    write_string(g, " }");
+    w(g, "~N~-~M}");
 }
 
-static void wlitref(struct generator * g, symbol * p) {  /* write ref to literal array */
-    if (SIZE(p) == 0) {
+static void wlitref(struct generator * g, const symbol * p) {  /* write ref to literal array */
+    int len = SIZE(p);
+    if (len == 0) {
         write_char(g, '0');
-    } else {
-        struct str * s = g->outbuf;
-        g->outbuf = g->declarations;
-        write_string(g, "static const symbol s_"); write_int(g, g->literalstring_count); write_string(g, "[] = ");
-        wlitarray(g, p);
-        write_string(g, ";\n");
-        g->outbuf = s;
-        write_string(g, "s_"); write_int(g, g->literalstring_count);
-        g->literalstring_count++;
+        return;
+    }
+
+    // We want to avoid generating duplicate literals (because the C/C++
+    // compiler can't easily merge them because they're required to have
+    // different addresses - the compiler would need to prove that nothing
+    // relies on the addresses being different, but the pointers are
+    // passed to the runtime code in a different compilation unit, so
+    // it clearly can't unless -flto is used, and not necessarily even
+    // then).
+    //
+    // Similarly, we also want to merge literals where one is a prefix of
+    // another.
+    //
+    // Currently we use a naive algorithm which scans all the literals
+    // we've allocated so far for each new literal string.  This will be
+    // O(n²) but for real world Snowball stemmers n is a few hundred at
+    // most so this is plenty fast enough in practice.
+    struct c_literalstring * s = g->c_literalstrings;
+    struct c_literalstring ** append_to = &(g->c_literalstrings);
+    int n = 0;
+    while (s) {
+        int s_len = SIZE(s->b);
+        int min_len = len < s_len ? len : s_len;
+        if (memcmp(p, s->b, min_len * sizeof(symbol)) == 0) {
+            if (len > s_len) {
+                // Replace entry with one which is longer but has the
+                // same prefix.
+                s->b = p;
+            }
+            break;
+        }
+        ++n;
+        append_to = &s->next;
+        s = s->next;
+    }
+    if (!s) {
+        NEW(c_literalstring, elt);
+        elt->next = NULL;
+        elt->b = p;
+        *append_to = elt;
+    }
+    write_string(g, "s_");
+    write_int(g, n);
+}
+
+// Used to generate the coverage logging code when -coverage is used.
+static void write_c_string_literal(struct generator * g, const symbol * s) {
+    for (int i = 0; i != SIZE(s); ++i) {
+        symbol ch = s[i];
+        if (32 <= ch && ch < 127) {
+            if (ch == '\"' || ch == '\\') {
+                write_char(g, '\\');
+            }
+            write_char(g, ch);
+        } else {
+            write_char(g, '\\');
+            write_octal3(g, ch);
+        }
     }
 }
 
@@ -220,32 +365,6 @@ static void writef(struct generator * g, const char * input, struct node * p) {
                 write_s(g, g->B[j]);
                 continue;
             }
-            case 'F': { // Among function dispatcher.
-                struct among * x = p->among;
-                if (x->function_count == 0) {
-                    write_char(g, '0');
-                    continue;
-                }
-
-                if (x->function_count == 1) {
-                    // Only one different function used in this among.
-                    struct amongvec * v = x->b;
-                    for (int j = 0; j < x->literalstring_count; j++) {
-                        if (v[j].function) {
-                            write_varref(g, v[j].function);
-                            goto continue_outer_loop;
-                        }
-                    }
-                    fprintf(stderr, "function_count == 1 but no among functions\n");
-                    exit(1);
-continue_outer_loop:
-                    continue;
-                }
-
-                w(g, "af_");
-                write_int(g, x->number);
-                continue;
-            }
             case 'I':
             case 'J':
             case 'c': {
@@ -308,7 +427,13 @@ static void w(struct generator * g, const char * s) {
 static void write_propagating_error(struct generator * g, const char * s,
                                     int keep_c,
                                     struct node *p) {
+    bool error_possible = true;
     if (g->options->target_lang == LANG_CPLUSPLUS) {
+        error_possible = false;
+    } else if (p->type == c_call && !can_error(p->name)) {
+        error_possible = false;
+    }
+    if (!error_possible) {
         if (keep_c) {
             write_block_start(g);
             w(g, "~Mint saved_c = z->c;~N");
@@ -411,7 +536,7 @@ static void generate_bra(struct generator * g, struct node * p) {
 
 static void generate_and(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed_for_connective(g, p->left)) {
+    if (K_needed_for_and(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -437,7 +562,7 @@ static void generate_and(struct generator * g, struct node * p) {
 
 static void generate_or(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed_for_connective(g, p->left)) {
+    if (K_needed_for_or(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -470,7 +595,7 @@ static void generate_or(struct generator * g, struct node * p) {
 
         if (g->label_used)
             wsetl(g, g->failure_label);
-        if (savevar) {
+        if (savevar && K_needed_node_on_f(p)) {
             write_restorecursor(g, p, savevar);
         }
         p = p->right;
@@ -503,7 +628,7 @@ static void generate_backwards(struct generator * g, struct node * p) {
 
 static void generate_not(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed(g, p->left)) {
+    if (K_needed_node_on_f(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -544,7 +669,7 @@ static void generate_not(struct generator * g, struct node * p) {
 
 static void generate_try(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed(g, p->left)) {
+    if (K_needed(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -600,7 +725,7 @@ static void generate_fail(struct generator * g, struct node * p) {
 /* generate_test() also implements 'reverse' */
 static void generate_test(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed(g, p->left)) {
+    if (K_needed(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -622,7 +747,7 @@ static void generate_test(struct generator * g, struct node * p) {
 
 static void generate_do(struct generator * g, struct node * p) {
     struct str * savevar = NULL;
-    if (K_needed(g, p->left)) {
+    if (K_needed(p->left)) {
         savevar = vars_newname(g);
     }
 
@@ -700,7 +825,7 @@ static void generate_GO_grouping(struct generator * g, struct node * p, int is_g
     }
 }
 
-static void generate_GO(struct generator * g, struct node * p, int style) {
+static void generate_GO(struct generator * g, struct node * p, int is_goto) {
     write_comment(g, p);
 
     int used = g->label_used;
@@ -710,7 +835,7 @@ static void generate_GO(struct generator * g, struct node * p, int style) {
     w(g, "~Mwhile (1) {~N~+");
 
     struct str * savevar = NULL;
-    if (style == 1 || repeat_restore(g, p->left)) {
+    if (is_goto || repeat_restore(p->left)) {
         savevar = vars_newname(g);
         write_savecursor(g, p, savevar);
     }
@@ -722,7 +847,7 @@ static void generate_GO(struct generator * g, struct node * p, int style) {
     generate(g, p->left);
 
     /* include for goto; omit for gopast */
-    if (style == 1) write_restorecursor(g, p, savevar);
+    if (is_goto) write_restorecursor(g, p, savevar);
     w(g, "~Mbreak;~N");
 
     if (g->label_used)
@@ -744,21 +869,27 @@ static void generate_GO(struct generator * g, struct node * p, int style) {
 
 static void generate_loop(struct generator * g, struct node * p) {
     write_comment(g, p);
-    w(g, "~{~Mint i; for (i = ");
+    if (g->options->target_lang == LANG_C) {
+        w(g, "~{~Mint i; for (i = ");
+    } else {
+        w(g, "~Mfor (int i = ");
+    }
     generate_AE(g, p->AE);
     writef(g, "; i > 0; i--) {~N~+", p);
 
     generate(g, p->left);
 
-    w(g,    "~}"
-         "~}");
+    w(g, "~}");
+    if (g->options->target_lang == LANG_C) {
+        w(g, "~}");
+    }
 }
 
 static void generate_repeat_or_atleast(struct generator * g, struct node * p, struct str * loopvar) {
     writef(g, "~Mwhile (1) {~+~N", p);
 
     struct str * savevar = NULL;
-    if (repeat_restore(g, p->left)) {
+    if (repeat_restore(p->left)) {
         savevar = vars_newname(g);
         write_savecursor(g, p, savevar);
     }
@@ -819,11 +950,6 @@ static void generate_atleast(struct generator * g, struct node * p) {
     str_delete(loopvar);
 }
 
-static void generate_setmark(struct generator * g, struct node * p) {
-    write_comment(g, p);
-    writef(g, "~M~V = z->c;~N", p);
-}
-
 static void generate_tomark(struct generator * g, struct node * p) {
     write_comment(g, p);
     g->S[0] = p->mode == m_forward ? ">" : "<";
@@ -832,22 +958,28 @@ static void generate_tomark(struct generator * g, struct node * p) {
     w(g, "~Mz->c = "); generate_AE(g, p->AE); writef(g, ";~N", p);
 }
 
-static void generate_atmark(struct generator * g, struct node * p) {
-    write_comment(g, p);
-    w(g, "~Mif (z->c != "); generate_AE(g, p->AE); writef(g, ") ~f~N", p);
-}
-
 static void generate_hop(struct generator * g, struct node * p) {
     write_comment(g, p);
     if (g->options->encoding == ENC_UTF8) {
         g->S[0] = p->mode == m_forward ? "" : "_b";
         g->S[1] = p->mode == m_forward ? "z->l" : "z->lb";
-        w(g, "~{~Mint ret = skip~S0_utf8(z->p, z->c, ~S1, ");
-        generate_AE(g, p->AE);
-        writef(g, ");~N", p);
-        writef(g, "~Mif (ret < 0) ~f~N", p);
-        writef(g, "~Mz->c = ret;~N"
-               "~}", p);
+        w(g, "~{");
+        if (p->AE->type == c_number) {
+            // Constant distance hop.
+            //
+            // No need to check for negative hop as that's converted to false by
+            // the analyser.
+            g->I[0] = p->AE->number;
+            w(g, "~Mint ret = skip~S0_utf8(z->p, z->c, ~S1, ~I0);~N");
+        } else {
+            w(g, "~Mint ae = ");
+            generate_AE(g, p->AE);
+            w(g, ";~N");
+            w(g, "~Mint ret = ae >= 0 ? skip~S0_utf8(z->p, z->c, ~S1, ae) : -1;~N");
+        }
+        w(g, "~Mif (ret < 0) ~f~N");
+        w(g, "~Mz->c = ret;~N");
+        w(g, "~}");
     } else {
         // Fixed-width characters.
         g->S[0] = p->mode == m_forward ? "+" : "-";
@@ -878,22 +1010,10 @@ static void generate_hop(struct generator * g, struct node * p) {
     }
 }
 
-static void generate_delete(struct generator * g, struct node * p) {
-    write_comment(g, p);
-    write_propagating_error(g, "slice_del(z)", false, p);
-}
-
 static void generate_tolimit(struct generator * g, struct node * p) {
     write_comment(g, p);
     g->S[0] = p->mode == m_forward ? "" : "b";
     writef(g, "~Mz->c = z->l~S0;~N", p);
-}
-
-static void generate_atlimit(struct generator * g, struct node * p) {
-    write_comment(g, p);
-    g->S[0] = p->mode == m_forward ? "" : "b";
-    g->S[1] = p->mode == m_forward ? "<" : ">";
-    writef(g, "~Mif (z->c ~S1 z->l~S0) ~f~N", p);
 }
 
 static void generate_leftslice(struct generator * g, struct node * p) {
@@ -937,6 +1057,10 @@ static void generate_stringassign(struct generator * g, struct node * p) {
 
 static void generate_slicefrom(struct generator * g, struct node * p) {
     write_comment(g, p);
+    if (p->literalstring && SIZE(p->literalstring) == 0) {
+        write_propagating_error(g, "slice_del(z)", false, p);
+        return;
+    }
     write_propagating_error(g, "slice_from_~$(z, ~a)", false, p);
 }
 
@@ -944,7 +1068,7 @@ static void generate_setlimit(struct generator * g, struct node * p) {
     write_comment(g, p);
     struct str * varname = vars_newname(g);
 
-    int extra_block = false;
+    bool extra_block = false;
     if (p->left && p->left->type == c_tomark) {
         /* Special case for:
          *
@@ -1129,7 +1253,8 @@ static void generate_call(struct generator * g, struct node * p) {
     if (just_return_on_fail(g)) {
         write_block_start(g);
         writef(g, "~Mint ret = ~V(z);~N", p);
-        if (g->options->target_lang == LANG_CPLUSPLUS) {
+        if (g->options->target_lang == LANG_CPLUSPLUS ||
+            !can_error(p->name)) {
             writef(g, "~Mif (ret == 0) return ret;~N", p);
         } else {
             /* For C, we need to propagate both failures and runtime errors so
@@ -1147,7 +1272,8 @@ static void generate_call(struct generator * g, struct node * p) {
             write_propagating_error(g, "~V(z)", false, p);
             writef(g, "~M~f~N", p);
         } else {
-            if (g->options->target_lang == LANG_CPLUSPLUS) {
+            if (g->options->target_lang == LANG_CPLUSPLUS ||
+                !can_error(p->name)) {
                 writef(g, "~Mif (!~V(z)) ~f~N", p);
             } else {
                 write_block_start(g);
@@ -1234,7 +1360,10 @@ static void generate_define(struct generator * g, struct node * p) {
     }
     writef(g, "int ~V(struct SN_env * z) {~N~+", p);
 
-    if (q->amongvar_needed) {
+    // The among implementation we use for C requires among_var for any
+    // among with functions.
+    if ((g->options->coverage ? q->has_among : q->has_among_function) ||
+        amongvar_needed(p->left)) {
         w(g, "~Mint among_var;~N");
     }
 
@@ -1263,6 +1392,44 @@ static void generate_define(struct generator * g, struct node * p) {
         }
     }
 
+    if (g->options->coverage && q->type == t_external) {
+        w(g, "~Mstatic int coverage_emitted = 0;~N");
+        w(g, "~Mif (!coverage_emitted) {~N~+");
+        w(g, "~Mcoverage_emitted = 1;~N");
+        for (struct among * x = g->analyser->amongs; x; x = x->next) {
+            if (!x->used) continue;
+            g->S[0] = g->analyser->tokeniser->file;
+            g->I[1] = x->number;
+            if (!x->always_matches) {
+                /* If the among matches the empty string without a gating
+                 * function then the "no match" case is impossible and so not
+                 * useful to include in a coverage report.
+                 */
+                g->I[0] = x->node->line_number,
+                w(g, "~Mfputs(\"~S0:~I0: among ~I1 no match\\n\", stderr);~N");
+            }
+            g->I[3] = x->literalstring_count;
+            for (int c = 0; c < x->literalstring_count; c++) {
+                /* Report every case once, then unused cases will appear (and
+                 * we can decrement each count when generating the coverage
+                 * report).
+                 */
+                const struct amongvec * e = x->v + c;
+                g->I[0] = e->line_number;
+                g->I[2] = e->string_index;
+                w(g, "~Mfputs(\"~S0:~I0: among ~I1 : ~I2 of ~I3 string '");
+                write_c_string_literal(g, e->b);
+                w(g, "'\\n\", stderr);~N");
+                if (e->function) {
+                    w(g, "~Mfputs(\"~S0:~I0: among ~I1 : ~I2 of ~I3 func-f '");
+                    write_c_string_literal(g, e->b);
+                    w(g, "'\\n\", stderr);~N");
+                }
+            }
+        }
+        w(g, "~-~M}~N");
+    }
+
     g->next_label = 0;
     g->var_number = 0;
 
@@ -1286,13 +1453,17 @@ static void generate_functionend(struct generator * g, struct node * p) {
     w(g, "~Mreturn 1;~N");
 }
 
+static int among_mode(struct among * x) {
+    return (x->substring ? x->substring : x->node)->mode;
+}
+
 static void generate_substring(struct generator * g, struct node * p) {
     write_comment(g, p);
 
     struct among * x = p->among;
     int block = -1;
     unsigned int bitmap = 0;
-    struct amongvec * among_cases = x->b;
+    struct amongvec * among_cases = x->v;
     int empty_case = -1;
     int n_cases = 0;
     symbol cases[2];
@@ -1300,7 +1471,6 @@ static void generate_substring(struct generator * g, struct node * p) {
 
     g->S[0] = p->mode == m_forward ? "" : "_b";
     g->I[0] = x->number;
-    g->I[1] = x->literalstring_count;
 
     /* In forward mode with non-ASCII UTF-8 characters, the first byte
      * of the string will often be the same, so instead look at the last
@@ -1344,7 +1514,7 @@ static void generate_substring(struct generator * g, struct node * p) {
         }
     }
 
-    int pre_check = (block != -1 || n_cases <= 2);
+    bool pre_check = (block != -1 || n_cases <= 2);
     if (g->options->coverage) {
         // Don't shortcut if generating coverage.
         pre_check = false;
@@ -1371,12 +1541,8 @@ static void generate_substring(struct generator * g, struct node * p) {
                 writef(g, "~Mif (z->c - ~I4 <= z->lb", p);
             }
         }
-        if (n_cases == 0) {
-            /* We get this for the degenerate case: among ( '' )
-             * This doesn't seem to be a useful construct, but it is
-             * syntactically valid.
-             */
-        } else if (n_cases == 1) {
+        assert(n_cases > 0);
+        if (n_cases == 1) {
             g->I[4] = cases[0];
             writef(g, " || ~S1 != ~I4", p);
         } else if (n_cases == 2) {
@@ -1387,9 +1553,9 @@ static void generate_substring(struct generator * g, struct node * p) {
             writef(g, " || ~S1 >> 5 != ~I2 || !((~I3 >> (~S1 & 0x1f)) & 1)", p);
         }
         write_string(g, ") ");
-        if (empty_case != -1) {
-            /* If the among includes the empty string, it can never fail
-             * so not matching the bitmap means we match the empty string.
+        if (empty_case != -1 && !among_cases[empty_case].function) {
+            /* If the among includes the ungated empty string, it can never
+             * fail so not matching the bitmap means we match the empty string.
              */
             g->I[4] = among_cases[empty_case].result;
             writef(g, "among_var = ~I4; else~N", p);
@@ -1402,10 +1568,207 @@ static void generate_substring(struct generator * g, struct node * p) {
 #endif
     }
 
-    if (x->amongvar_needed) {
-        writef(g, "~Mamong_var = find_among~S0(z, a_~I0, ~I1, ~F);~N", p);
+    if (g->options->coverage || x->amongvar_needed || x->function_count) {
+        if (x->c0_used) {
+            write_block_start(g);
+            w(g, "~Mint c0 = z->c;~N");
+        }
+        writef(g, "~Mamong_var = find_among~S0(z, a_~I0);~N", p);
+        if (x->function_count) {
+            // The C/C++ find_among()/find_among_b() helper function doesn't
+            // call among functions itself, but instead returns an among
+            // function scenario (AFS) code.
+            //
+            // For an among with functions, we generate C code which handles an
+            // AFS code by calling the appropriate among function.  If it
+            // signals t then among_var is set appropriately and we continue
+            // as normal.  If it fails it adjusts among_var and the cursor;
+            // if there is a chain of among functions (e.g. lovins.sbl has two
+            // such chains of length 5) then it loops to follow along the
+            // chain, checking further among functions until either one
+            // succeeds or it reaches the end of the chain.
+            //
+            // This approach minimises calling of among functions, which is
+            // good since an among function can be arbitrarily expensive (we
+            // will call the same among functions as the original among
+            // implementation did).  It also avoids needing a dispatch function
+            // or dynamic load-time relocations.
+            int among_function_chains = false;
+            for (int i = 0; i < x->af_count; ++i) {
+                struct among_function_scenario * scenario = &x->af[i];
+                if ((scenario->t_result & AFS_FLAG) ||
+                    (scenario->f_result & AFS_FLAG)) {
+                    among_function_chains = true;
+                    break;
+                }
+            }
+            int mask = x->af_count - 1;
+            if (mask != 0) {
+                // Use smallest all-1 mask that works.
+                mask |= mask >> 1;
+                mask |= mask >> 2;
+                mask |= mask >> 4;
+                mask |= mask >> 8;
+            }
+            w(g, "~Mif ((among_var & 0x");
+            write_hex4(g, AFS_FLAG);
+            if (among_function_chains || mask == 0) {
+                // If there are among function chains then we wrap in:
+                //
+                //   do {
+                //     ...
+                //     break;
+                //   } while (1);
+                //
+                // and use `continue;` in the case where we need to follow a
+                // chain.
+                //
+                // If (mask == 0), there's only one among function scenario
+                // so we don't emit the `switch` and instead wrap in a dummy
+                // loop so that `break;` still works:
+                //
+                //   do {
+                //     ...
+                //   } while (0);
+                w(g, ")) do {~N~+");
+            } else {
+                w(g, ")) {~N~+");
+            }
+            w(g, "~Mint c = z->c;~N");
+            assert(x->af_count <= AFS_FLAG);
+            if (mask != 0) {
+                // Don't emit a switch if there's only one case.
+                w(g, "~Mswitch (among_var & 0x");
+                write_hex(g, mask);
+                w(g, ") {~N~+");
+            }
+            for (int i = 0; i < x->af_count; ++i) {
+                struct among_function_scenario * scenario = &x->af[i];
+                struct name * q = scenario->function;
+                if (q == NULL) {
+                    // With `-coverage` the AFS index is an among_vec index,
+                    // with unused entries indicated by ->function == NULL.
+                    assert(g->options->coverage);
+                    continue;
+                }
+                int cursor_adjustment = scenario->cursor_adjustment;
+                int t_result = scenario->t_result;
+                int f_result = scenario->f_result;
+                g->I[0] = i;
+                if (mask != 0) {
+                    w(g, "~Mcase ~I0: {~+~N");
+                }
+                w(g, "~Mint ret = ");
+                write_varref(g, q);
+                w(g, "(z);~N");
+
+                // ret > 0: function signalled t.
+                w(g, "~Mif (ret > 0) { ");
+                if (K_needed(q->definition)) {
+                    // Restore cursor if routine may have changed it.
+                    w(g, "z->c = c; ");
+                }
+                assert((t_result & AFS_FLAG) == 0);
+                g->I[0] = t_result;
+                w(g, "among_var = ~I0; break; }~N");
+                if (g->options->target_lang == LANG_C && can_error(q)) {
+                    // The original C among implementation swallowed an error
+                    // return from an among function.  In practice, none of
+                    // the shipped algorithms use among functions which can
+                    // error, but with the new among approach we can statically
+                    // check if the among function can error and only emit code
+                    // to handle it if it can happen.
+                    w(g, "~Mif (ret < 0) return ret;~N");
+                }
+                if (g->options->coverage) {
+                    const struct amongvec * e = x->v + i;
+                    g->S[0] = g->analyser->tokeniser->file;
+                    g->I[0] = e->line_number;
+                    g->I[1] = x->number;
+                    g->I[2] = e->string_index;
+                    g->I[3] = x->literalstring_count;
+                    w(g, "~Mfputs(\"~S0:~I0: among ~I1 : ~I2 of ~I3 func-f '");
+                    write_c_string_literal(g, e->b);
+                    w(g, "'\\n\", stderr);~N");
+                }
+                g->I[2] = cursor_adjustment;
+                g->I[3] = f_result;
+                g->S[0] = (among_mode(x) == m_forward) ? "+" : "-";
+                if (f_result) {
+                    assert(cursor_adjustment >= 0);
+                    if (cursor_adjustment > 0) {
+                        w(g, "~Mz->c = c0 ~S0 ~I2;~N");
+                    }
+                } else {
+                    // among_var == 0 means the among signals f and the cursor
+                    // will get restored when that signal is handled.
+                    assert(cursor_adjustment == -1);
+                }
+                w(g, "~Mamong_var = ~I3;~N");
+                if ((f_result & AFS_FLAG)) {
+                    assert(among_function_chains);
+                    w(g, "~Mcontinue;~N");
+                } else if (mask != 0) {
+                    w(g, "~Mbreak;~N");
+                }
+                if (mask != 0) {
+                    w(g, "~-~M}~N");
+                }
+            }
+            if (mask != 0) {
+                w(g, "~-~M}~N");
+            }
+            if (among_function_chains) {
+                w(g, "~Mbreak;~N~-"
+                     "~M} while (1);~N");
+            } else if (mask == 0) {
+                w(g, "~-"
+                     "~M} while (0);~N");
+            } else {
+                w(g, "~-"
+                     "~M}~N");
+            }
+            // Note: In general the same function may be called by more than
+            // one scenario (e.g. from different among actions with the same
+            // gating function).
+        }
+        if (g->options->coverage) {
+            // With -coverage enabled, we build the among table to return a
+            // unique value for each among string, and generate a table to map
+            // that to the among_var value.
+            g->S[0] = g->analyser->tokeniser->file;
+            g->I[1] = x->number;
+            write_block_start(g);
+            w(g, "~Mstatic const int t[] = { 0");
+            for (int c = 0; c < x->literalstring_count; ++c) {
+                write_string(g, ", ");
+                write_int(g, among_cases[c].result);
+            }
+            w(g, " };~N");
+            w(g, "~Mswitch (among_var) {~N~+");
+            g->I[0] = x->node->line_number,
+            w(g, "~Mcase 0: fputs(\"~S0:~I0: among ~I1 no match\\n\", stderr); break;~N");
+            g->I[3] = x->literalstring_count;
+            for (int c = 0; c < x->literalstring_count; ++c) {
+                const struct amongvec * e = x->v + c;
+                g->I[0] = e->line_number;
+                g->I[2] = e->string_index;
+                w(g, "~Mcase ");
+                write_int(g, c + 1);
+                w(g, ": fputs(\"~S0:~I0: among ~I1 : ~I2 of ~I3 string '");
+                write_c_string_literal(g, e->b);
+                w(g, "'\\n\", stderr); break;~N");
+            }
+            w(g, "~-~M}~N");
+            g->I[0] = AFS_FLAG;
+            w(g, "~Mif (!(among_var & ~I0)) among_var = t[among_var];~N");
+            write_block_end(g);
+        }
         if (!x->always_matches) {
             writef(g, "~Mif (!among_var) ~f~N", p);
+        }
+        if (x->c0_used) {
+            write_block_end(g);
         }
         return;
     }
@@ -1425,12 +1788,12 @@ static void generate_substring(struct generator * g, struct node * p) {
     }
 
     if (x->always_matches) {
-        writef(g, "~Mfind_among~S0(z, a_~I0, ~I1, ~F);~N", p);
+        writef(g, "~Mfind_among~S0(z, a_~I0);~N", p);
     } else if (x->command_count == 0 && tailcallable(g, p)) {
-        writef(g, "~Mreturn find_among~S0(z, a_~I0, ~I1, ~F) != 0;~N", p);
+        writef(g, "~Mreturn find_among~S0(z, a_~I0) != 0;~N", p);
         x->node->right = NULL;
     } else {
-        writef(g, "~Mif (!find_among~S0(z, a_~I0, ~I1, ~F)) ~f~N", p);
+        writef(g, "~Mif (!find_among~S0(z, a_~I0)) ~f~N", p);
     }
 }
 
@@ -1518,14 +1881,10 @@ static void generate(struct generator * g, struct node * p) {
         case c_repeat:        generate_repeat(g, p); break;
         case c_loop:          generate_loop(g, p); break;
         case c_atleast:       generate_atleast(g, p); break;
-        case c_setmark:       generate_setmark(g, p); break;
         case c_tomark:        generate_tomark(g, p); break;
-        case c_atmark:        generate_atmark(g, p); break;
         case c_hop:           generate_hop(g, p); break;
-        case c_delete:        generate_delete(g, p); break;
         case c_next:          generate_next(g, p); break;
         case c_tolimit:       generate_tolimit(g, p); break;
-        case c_atlimit:       generate_atlimit(g, p); break;
         case c_leftslice:     generate_leftslice(g, p); break;
         case c_rightslice:    generate_rightslice(g, p); break;
         case c_assignto:      generate_assignto(g, p); break;
@@ -1576,6 +1935,7 @@ static void generate(struct generator * g, struct node * p) {
 
 static void generate_head(struct generator * g) {
     struct options * o = g->options;
+    bool wide = (o->encoding == ENC_WIDECHARS);
     if (o->cheader) {
         int quoted = (o->cheader[0] == '<' || o->cheader[0] == '"');
         w(g, "#include ");
@@ -1601,11 +1961,22 @@ static void generate_head(struct generator * g) {
         w(g, "#include <limits.h>~N");
     }
     w(g, "#include <stddef.h>~N~N");
+    if (g->options->coverage) {
+        w(g, "#include <stdio.h>~N");
+    }
 
     if (o->target_lang == LANG_CPLUSPLUS) {
         w(g, "~Mtypedef ");
         write_string(g, o->package);
         w(g, "::~n::SN_local SN_local;~N~N");
+
+        if (g->analyser->amongs && !wide) {
+            w(g, "~M#ifdef SNOWBALL_BIGENDIAN~N");
+            w(g, "~M#define S(W) ((0x##W & 0xff) << 8 | 0x##W >> 8)~N");
+            w(g, "~M#else~N");
+            w(g, "~M#define S(W) (0x##W)~N");
+            w(g, "~M#endif~N~N");
+        }
         return;
     }
 
@@ -1635,7 +2006,7 @@ static void generate_head(struct generator * g) {
 
         for (struct name * name = g->analyser->names; name; name = name->next) {
             if (!name->local_to && name->type == t_boolean) {
-                if (g->options->target_lang == LANG_CPLUSPLUS) {
+                if (o->target_lang == LANG_CPLUSPLUS) {
                     w(g, "~Mbool ");
                 } else {
                     w(g, "~Munsigned char ");
@@ -1655,12 +2026,20 @@ static void generate_head(struct generator * g) {
 
         w(g, "~-~M};~N~N");
 
-        if (g->options->target_lang == LANG_C) {
+        if (o->target_lang == LANG_C) {
             w(g, "typedef struct SN_local SN_local;~N~N");
         }
     }
 
-    const char * vp = g->options->variables_prefix;
+    if (g->analyser->amongs && !wide) {
+        w(g, "~M#ifdef SNOWBALL_BIGENDIAN~N");
+        w(g, "~M#define S(W) ((0x##W & 0xff) << 8 | 0x##W >> 8)~N");
+        w(g, "~M#else~N");
+        w(g, "~M#define S(W) (0x##W)~N");
+        w(g, "~M#endif~N~N");
+    }
+
+    const char * vp = o->variables_prefix;
     if (vp) {
         for (struct name * q = g->analyser->names; q; q = q->next) {
             if (q->local_to) continue;
@@ -1688,7 +2067,7 @@ static void generate_head(struct generator * g) {
                          "}~N~N");
                     break;
                 case t_boolean:
-                    if (g->options->target_lang == LANG_CPLUSPLUS) {
+                    if (o->target_lang == LANG_CPLUSPLUS) {
                         w(g, "extern bool ");
                     } else {
                         w(g, "extern int ");
@@ -1735,98 +2114,602 @@ static void generate_routine_declarations(struct generator * g) {
     }
 }
 
+static symbol xfix_ch(struct amongvec * v, int i, bool forwards) {
+    assert(i < v->size);
+    return v->b[forwards ? i : v->size - 1 - i];
+}
+
+// The amongvec is sorted such that common suffix/prefix strings are
+// consecutive - more precisely:
+// * if `forwards`, by byte string order of the prefixes;
+// * if `!forwards`, by byte string order of the reversed suffixes.
+// We take advantage of this and pass in a range of entries (via start index
+// `lo` and end index `hi`) and just look at that range, shrinking it for
+// recursive calls.
+//
+// "xfix" is the suffix or prefix depending on the direction.
+static int build_among_table_(struct generator * g, struct among * x,
+                              int lo, int hi, int xfix_len,
+                              int forwards, int longest_sub) {
+    struct amongvec * v = x->v;
+    bool wide = (g->options->encoding == ENC_WIDECHARS);
+
+    assert(lo <= hi);
+    assert(xfix_len >= 0);
+    assert(xfix_len <= v[lo].size);
+    for (int i = lo + 1; i <= hi; ++i) {
+        assert(xfix_len < v[i].size);
+        symbol * b0 = v[lo].b;
+        symbol * b = v[i].b;
+        if (!forwards) {
+            b0 += v[lo].size - xfix_len;
+            b += v[i].size - xfix_len;
+        }
+        assert(memcmp(b0, b, xfix_len * sizeof(symbol)) == 0);
+    }
+
+    int exact = 0;
+    if (v[lo].size == xfix_len) {
+        // The current prefix/suffix is exactly present in this among.
+        struct amongvec * v_exact = v + lo;
+        exact = g->options->coverage ? lo + 1 : v_exact->result;
+        if (exact < 0) exact = AFS_FLAG - 1;
+        assert(exact != 0);
+        if (v_exact->function_index) {
+            int cursor_adjustment;
+            if (v_exact->i < 0) {
+                cursor_adjustment = -1;
+            } else {
+                cursor_adjustment = v[v_exact->i].size;
+            }
+            // If the among function signals t, the among result is t_result
+            //   (i.e. variable `exact`)
+            // If the among function signals f:
+            // * If cursor_adjustment == -1 then f_result is 0 as is the among
+            //   result (i.e. no match)
+            // * Otherwise:
+            //   + cursor_adjustment is applied to the cursor value on entry
+            //     (add for forwards; subtract for backwards)
+            //   + the among result is f_result
+
+            struct name * function = v_exact->function;
+            int t_result = exact;
+            int f_result = longest_sub;
+            if (g->options->coverage) {
+                // With -coverage use the among_vec index as the AFS index.
+                exact = lo;
+                if (exact >= x->af_count) x->af_count = exact + 1;
+                x->af[exact].function = function;
+                x->af[exact].t_result = t_result;
+                x->af[exact].f_result = f_result;
+                x->af[exact].cursor_adjustment = cursor_adjustment;
+                x->c0_used = x->c0_used || (f_result && cursor_adjustment > 0);
+            } else {
+                bool add = true;
+                for (int i = 0; i < x->af_count; ++i) {
+                    if (x->af[i].function == function &&
+                        x->af[i].t_result == t_result &&
+                        x->af[i].f_result == f_result &&
+                        x->af[i].cursor_adjustment == cursor_adjustment) {
+                        exact = i;
+                        add = false;
+                        break;
+                    }
+                }
+                if (add) {
+                    x->af[x->af_count].function = function;
+                    x->af[x->af_count].t_result = t_result;
+                    x->af[x->af_count].f_result = f_result;
+                    x->af[x->af_count].cursor_adjustment = cursor_adjustment;
+                    x->c0_used = x->c0_used || (f_result && cursor_adjustment > 0);
+                    exact = x->af_count++;
+                }
+            }
+            exact |= AFS_FLAG;
+        }
+        if (lo == hi) {
+            return -exact;
+        }
+        ++lo;
+    }
+
+    int offset = SIZE(x->table);
+
+    symbol min = xfix_ch(v + lo, xfix_len, forwards);
+    symbol max = xfix_ch(v + hi, xfix_len, forwards);
+
+    if (min == max) {
+        // All entries with the current prefix/suffix have the same next byte.
+        // Check following bytes until we find where that stops being the
+        // case.
+        int old_xfix_len = xfix_len;
+        int size_limit = v[lo].size < v[hi].size ? v[lo].size : v[hi].size;
+        while (++xfix_len < size_limit) {
+            symbol lo_ch = xfix_ch(v + lo, xfix_len, forwards);
+            symbol hi_ch = xfix_ch(v + hi, xfix_len, forwards);
+            if (lo_ch != hi_ch) break;
+        }
+
+        // We only encode a segment of length two or more, since a 1-way switch
+        // is one word shorter and slightly easier to decode than segment of
+        // length 1.
+        int segment_len = xfix_len - old_xfix_len;
+        if (!wide && segment_len > 255) {
+            // We could encode this by splitting the segment, but it's not a
+            // limit we're realistically going to get anywhere near in a real
+            // stemming algorithm.
+            printf("Sorry, we don't currently support an among segment > 255 bytes in non-wide mode\n");
+            exit(1);
+        }
+        if (segment_len > 1) {
+            // Emit a segment to check for.
+            //
+            // non-wide:
+            //
+            // 0       2             RES_IES  <'i' 'e' packed into bytes>
+            // ^exact  ^length
+            //         (top byte 0)   ^--- NB this is negated for exact
+            //
+            // wide:
+            //
+            // 0       2       0     RES_IES   'i' 'e'
+            // ^exact  ^length
+            //                        ^--- NB this is negated for exact
+            if (exact) longest_sub = exact;
+            int entry_len = wide ? segment_len + 4 : ((segment_len + 1) >> 1) + 3;
+            int new_size = SIZE(x->table) + entry_len;
+            x->table = resize_b(x->table, new_size);
+            if (!wide)
+                x->table_endianness = resize_s(x->table_endianness, new_size);
+            x->table[offset] = exact;
+            x->table[offset + 1] = segment_len;
+            if (wide) {
+                x->table[offset + 2] = 0;
+            }
+            if (min > max) {
+                // exact can only be zero here if there is nothing in the among
+                // with the specified prefix, which shouldn't happen.
+                assert(exact);
+                x->table[offset + (wide ? 3 : 2)] = -exact;
+            } else {
+                int ptr = build_among_table_(g, x, lo, hi, xfix_len, forwards,
+                                             exact ? exact : longest_sub);
+                x->table[offset + (wide ? 3 : 2)] = ptr;
+            }
+            symbol * from = v[lo].b;
+            if (forwards) from += old_xfix_len; else from += v[lo].size - old_xfix_len - segment_len;
+            if (wide) {
+                symbol * to = &(x->table[offset + 4]);
+                for (int i = 0; i < segment_len; ++i) {
+                    to[i] = from[i];
+                }
+            } else {
+                symbol * to = &(x->table[offset + 3]);
+                for (int i = 1; i < segment_len; i += 2) {
+                    *to++ = from[i - 1] | (from[i] << 8);
+                }
+                if (segment_len & 1) {
+                    *to = from[segment_len - 1];
+                }
+                // Flag segment data as needing byteswapping on big-endian
+                // platforms.
+                memset(&x->table_endianness[offset + 3], 1,
+                       (segment_len + 1) >> 1);
+            }
+            int len = SIZE(x->table) - offset;
+            for (struct among_subtree * t = x->subtree; t; t = t->next) {
+                if (t->len == len) {
+                    if (memcmp(x->table + t->start,
+                               x->table + offset,
+                               len * sizeof(x->table[0])) == 0) {
+                        SET_SIZE(x->table, offset);
+                        if (!wide) {
+                            SET_SIZE(x->table_endianness, offset);
+                        }
+                        return t->start;
+                    }
+                }
+            }
+            NEW(among_subtree, t);
+            t->start = offset;
+            t->len = len;
+            t->next = x->subtree;
+            x->subtree = t;
+            if (offset >= 0x8000) {
+                printf("%s:%d: generated among table is too large! "
+                       "Please open bug against snowball compiler\n",
+                       g->analyser->tokeniser->file, x->node->line_number);
+                exit(1);
+            }
+            return offset;
+        }
+        xfix_len = old_xfix_len;
+    }
+
+    assert(min <= max);
+    int min_length_match = INT_MAX;
+    for (int i = lo; i <= hi; i++) {
+        if (v[i].size < min_length_match) min_length_match = v[i].size;
+    }
+    // FIXME: If we stored this in each entry we could sometimes shortcut
+    // knowing there's no way any prefixes/suffixes can match.
+    (void)min_length_match;
+
+    if (exact) longest_sub = exact;
+    int lo1 = lo;
+    int hi0 = hi;
+    if (max > min && hi - lo > 1) {
+        // There are more than two cases and the bounds are not adjacent,
+        // but there might only be two different next characters, which
+        // means this might still be a two-way switch on the next
+        // character.
+        while (hi - lo1 > 1) {
+            symbol ch = xfix_ch(v + lo1 + 1, xfix_len, forwards);
+            if (ch != min) break;
+            ++lo1;
+        }
+        while (hi0 - lo1 > 1) {
+            symbol ch = xfix_ch(v + hi0 - 1, xfix_len, forwards);
+            if (ch != max) break;
+            --hi0;
+        }
+    }
+    if ((max > min && hi0 - lo1 == 1) && min > 0) {
+        // Only the two end values of the range are used.  This case is common
+        // (approaching half the ranges we generate) and the most extreme is a
+        // gap of 150 between 'a' and 0xf8.  We encode such cases by swapping
+        // the min and max values, and only storing two pointers.  This reduces
+        // the table size, which reduces the working set size and so is more
+        // cache friendly.
+        //
+        // Do an 2-way dispatch on the next code-unit:
+        //
+        // non-wide:
+        //
+        // 0       's'|('d'<<8)    OFFSET_D  OFFSET_S
+        //                          ^----------^-----NB negated for exact
+        //
+        // wide:
+        //
+        // 0       's'      'd'    OFFSET_D  OFFSET_S
+        //                          ^----------^-----NB negated for exact
+        //
+        // This is encoded by swapping the range ends compared to an N-way
+        // dispatch.  The edge case where min is zero would collide with the
+        // encoding of a segment, so we encode that as N-way (U+0000 is not
+        // likely to appear in real world stemmer code).
+        int entry_len = 4 + (int)wide;
+        x->table = resize_b(x->table, SIZE(x->table) + entry_len);
+        x->table[offset] = exact;
+
+        int off = offset + 1;
+        if (wide) {
+            x->table[off++] = max;
+            x->table[off++] = min;
+        } else {
+            x->table[off++] = max | (min << 8);
+        }
+        x->table[off++] = build_among_table_(g, x,
+                                             lo, lo1,
+                                             xfix_len + 1,
+                                             forwards,
+                                             exact ? exact : longest_sub);
+        x->table[off++] = build_among_table_(g, x,
+                                             hi0, hi,
+                                             xfix_len + 1,
+                                             forwards,
+                                             exact ? exact : longest_sub);
+    } else {
+        // Do an N-way dispatch on the next code-unit:
+        //
+        // non-wide:
+        //
+        // 0       'd'|('s'<<8)    OFFSET_D 0 0 ... OFFSET_S
+        //                          ^-----------------^-----NB negated for exact
+        //
+        // wide:
+        //
+        // 0       'd'      's'    OFFSET_D 0 0 ... OFFSET_S
+        //                          ^-----------------^-----NB negated for exact
+#ifdef REPORT_SPARSE_AMONG_NWAYS
+        // Report showing sparseness of n-ways:
+        if (max != min) {
+            int n = 0;
+            int l = lo;
+            while (l <= hi) {
+                ++n;
+                symbol ch = xfix_ch(v + l, xfix_len, forwards);
+                int h = l;
+                while (h < hi && ch == xfix_ch(v + h + 1, xfix_len, forwards)) {
+                    ++h;
+                }
+                l = h + 1;
+            }
+            printf("+++ NWAY window %d:%d %d of %d %.1f%%:",
+                   min, max, n, max - min + 1,
+                   100 * n / (double)(max - min + 1));
+            l = lo;
+            while (l <= hi) {
+                ++n;
+                symbol ch = xfix_ch(v + l, xfix_len, forwards);
+                printf(" 0x%x", ch);
+                int h = l;
+                while (h < hi && ch == xfix_ch(v + h + 1, xfix_len, forwards)) {
+                    ++h;
+                }
+                l = h + 1;
+            }
+            printf("\n");
+        }
+#endif
+        int entry_len = (max - min) + 1 + 2 + (int)wide;
+        x->table = resize_b(x->table, SIZE(x->table) + entry_len);
+        int off = offset;
+        x->table[off++] = exact;
+        if (wide) {
+            x->table[off++] = min;
+            x->table[off++] = max;
+        } else {
+            x->table[off++] = min | (max << 8);
+        }
+        for (int i = 0; i < max - min + 1; ++i) {
+            x->table[off + i] = 0;
+        }
+        int l = lo;
+        while (l <= hi) {
+            symbol ch = xfix_ch(v + l, xfix_len, forwards);
+            int h = l;
+            while (h < hi && ch == xfix_ch(v + h + 1, xfix_len, forwards)) {
+                ++h;
+            }
+            int r = build_among_table_(g, x,
+                                       l, h,
+                                       xfix_len + 1,
+                                       forwards,
+                                       exact ? exact : longest_sub);
+            x->table[off + (ch - min)] = r;
+            l = h + 1;
+        }
+    }
+
+    int len = SIZE(x->table) - offset;
+    for (struct among_subtree * t = x->subtree; t; t = t->next) {
+        if (t->len == len) {
+            if (memcmp(x->table + t->start,
+                       x->table + offset,
+                       len * sizeof(x->table[0])) == 0) {
+                SET_SIZE(x->table, offset);
+                return t->start;
+            }
+        }
+    }
+    NEW(among_subtree, t);
+    t->start = offset;
+    t->len = len;
+    t->next = x->subtree;
+    x->subtree = t;
+
+    if (offset >= 0x8000) {
+        printf("%s:%d: generated among table is too large! "
+               "Please open bug against snowball compiler\n",
+               g->analyser->tokeniser->file, x->node->line_number);
+        exit(1);
+    }
+    return offset;
+}
+
+static void build_among_table(struct generator * g, struct among * x) {
+    // Build a table which encodes an among as a state machine where each
+    // transition is either an O(1) multi-way dispatch on the next
+    // byte/character or a check that a particular string of bytes/characters
+    // follows (in UTF-8 it works in bytes; for fixed-width encodings it works
+    // in characters).
+    if (x->function_count) {
+        // Each among case with a function creates an among function scenario,
+        // but some may be identical in which case they are merged.  This means
+        // x->function_count is an upper bound on the number of entries we
+        // need.
+        //
+        // With -coverage we use the amongvec index as the af index.
+        bool coverage = g->options->coverage;
+        NEWVEC(among_function_scenario, af,
+               coverage ? x->literalstring_count : x->function_count);
+        if (coverage) {
+            for (int i = 0; i < x->literalstring_count; ++i) {
+                af[i] = (struct among_function_scenario){0};
+            }
+        }
+        x->af = af;
+    }
+
+    // 512 is large enough for ~90% of amongs.
+    x->table = create_b(512);
+    x->table_endianness = create_s(g->options->encoding == ENC_WIDECHARS ? 1 : 512);
+    int root = build_among_table_(g, x,
+                                  0, x->literalstring_count - 1, 0,
+                                  (among_mode(x) == m_forward), 0);
+    assert(root == 0);
+}
+
 static void generate_among_table(struct generator * g, struct among * x) {
     write_newline(g);
     write_comment(g, x->node);
-
-    struct amongvec * v = x->b;
-
+    bool wide = (g->options->encoding == ENC_WIDECHARS);
+    symbol * b = x->table;
+    byte * e = x->table_endianness;
     g->I[0] = x->number;
-    for (int i = 0; i < x->literalstring_count; i++) {
-        if (v[i].size) {
-            g->I[1] = i;
-            g->I[2] = v[i].size;
-            w(g, "static const symbol s_~I0_~I1[~I2] = ");
-            wlitarray(g, v[i].b);
-            w(g, ";~N");
+    w(g, "~Mstatic const unsigned short a_~I0[] = {~N~+");
+    write_margin(g);
+    for (int i = 0; i < SIZE(b); i++) {
+        if (i > 0) {
+            if ((i & 7)) {
+                write_string(g, ", ");
+            } else {
+                w(g, ",~N~M");
+            }
         }
-    }
-
-    g->I[1] = x->literalstring_count;
-    if (g->options->coverage) {
-        g->I[1] = g->I[1] * 2 + 1;
-    }
-    w(g, "~Mstatic const struct among a_~I0[~I1] = {~N");
-
-    for (int i = 0; i < x->literalstring_count; i++) {
-        if (i) w(g, ",~N");
-        g->I[1] = i;
-        g->I[2] = v[i].size;
-        g->I[3] = (v[i].i >= 0 ? v[i].i - i : 0);
-        g->I[4] = v[i].result;
-        g->I[5] = v[i].function_index;
-
-        if (g->options->comments) {
-            w(g, "/*~J1 */ ");
-        }
-        w(g, "{ ~I2, ");
-        if (v[i].size == 0) {
-            w(g, "0,");
+        if (i < SIZE(e) && e[i]) {
+            write_string(g, "S(");
+            write_hex4(g, (int)b[i]);
+            write_char(g, ')');
         } else {
-            w(g, "s_~I0_~I1,");
+            write_string(g, "0x");
+            write_hex4(g, (int)b[i]);
+            if (!wide) write_char(g, ' ');
         }
-        w(g, " ~I3, ~I4, ~I5}");
     }
-    if (g->options->coverage) {
-        w(g, ",~N");
-        g->S[1] = g->analyser->tokeniser->file;
-        for (int i = 0; i < x->literalstring_count; i++) {
-            if (g->options->comments) {
-                w(g, "/* coverage */ ");
-            }
-            g->I[1] = x->b[i].line_number;
-            g->I[2] = x->b[i].string_index;
-            w(g, "{ ~I0, (const symbol*)\"~S1:~I1\", 0, ~I2, 0 },~N");
-        }
-        if (x->always_matches) {
-            g->I[0] = -1;
-        }
-        if (g->options->comments) {
-            w(g, "/* coverage */ ");
-        }
-        g->I[1] = x->node->line_number;
-        w(g, "{ ~I0, (const symbol*)\"~S1:~I1\", 0, 0, 0 },~N");
-    }
-    w(g, "~N};~N");
+    write_newline(g);
+    w(g, "~-~M};~N");
+}
 
-    if (x->function_count <= 1) return;
+static void generate_stringliterals(struct generator * g) {
+    struct str * saved_outbuf = g->outbuf;
+    g->outbuf = g->declarations;
 
-    w(g, "~N~Mstatic int af_~I0(struct SN_env * z) {~N~+");
-    w(g, "~Mswitch (z->af) {~N~+");
-    for (int n = 1; n <= x->function_count; n++) {
-        w(g, "~Mcase ");
-        write_int(g, n);
-        w(g, ": return ");
-        for (int i = 0; i < x->literalstring_count; i++) {
-            if (v[i].function_index == n) {
-                write_varref(g, v[i].function);
-                w(g, "(z);~N");
-                break;
+    int eliminated = 0;
+    int n_s = 0;
+    for (struct c_literalstring * s = g->c_literalstrings; s; s = s->next) {
+        if (s->b) {
+            int n_r = 0;
+            for (struct c_literalstring * r = g->c_literalstrings; r; r = r->next) {
+                if (r->b) {
+                    int d = (SIZE(s->b) - SIZE(r->b));
+                    if (d > 0) {
+                        // Look for r as a substring of s.
+                        int len = SIZE(r->b) * sizeof(symbol);
+                        for ( ; d; --d) {
+                            if (memcmp(s->b + d, r->b, len) == 0) {
+                                r->b = NULL;
+                                w(g, "~M#define s_");
+                                write_int(g, n_r);
+                                w(g, " (s_");
+                                write_int(g, n_s);
+                                w(g, " + ");
+                                write_int(g, d);
+                                w(g, ")~N");
+                                ++eliminated;
+                                break;
+                            }
+                        }
+                    }
+                }
+                ++n_r;
             }
         }
+        ++n_s;
     }
-    w(g, "~-~M}~N");
-    w(g, "~Mreturn -1;~N");
-    w(g, "~-~M}~N");
+
+    struct pool_string {
+        symbol * b;
+        int n;
+    };
+    int n_strings = n_s - eliminated;
+    NEWVEC(pool_string, strings, n_strings);
+    {
+        int n = 0, i = 0;
+        struct c_literalstring * s = g->c_literalstrings;
+        while (s) {
+            if (s->b) {
+                if (i >= n_strings) {
+                    printf("Miscounted string pool entries\n");
+                    exit(1);
+                }
+                strings[i].b = copy_b(s->b);
+                strings[i].n = n;
+                ++i;
+            }
+            ++n;
+            struct c_literalstring * to_free = s;
+            s = s->next;
+            FREE(to_free);
+        }
+        g->c_literalstrings = NULL;
+        assert(i == n_strings);
+        n_strings = i;
+    }
+
+    // We want to find the minimal superstring, which is an NP-complete
+    // problem.  Sometimes n_strings will be small enough that we could
+    // actually do an exhaustive search, but in those cases the extra savings
+    // are going to be very small anyway.
+    //
+    // So we use a simple greedy algorithm which should find a reasonably good
+    // solution.  Each step finds the pair of strings with the largest overlap
+    // (if there are multiple pairs with the same largest overlap then we pick
+    // the pair which minimises the combined length).
+    while (n_strings > 1) {
+        int best_a = 0, best_b = 0, best_overlap = 0, best_combined = 0;
+        for (int i = 1; i < n_strings; ++i) {
+            for (int j = 0; j < i; ++j) {
+                int overlap;
+                if (SIZE(strings[i].b) >= SIZE(strings[j].b)) {
+                    overlap = SIZE(strings[j].b);
+                } else {
+                    overlap = SIZE(strings[i].b);
+                }
+                while (--overlap >= best_overlap) {
+                    if (memcmp(strings[i].b,
+                               strings[j].b + SIZE(strings[j].b) - overlap,
+                               overlap * sizeof(symbol)) == 0) {
+                        int combined = SIZE(strings[i].b) + SIZE(strings[j].b);
+                        if (best_overlap == overlap) {
+                            if (combined >= best_combined) continue;
+                        }
+                        best_a = j;
+                        best_b = i;
+                        best_overlap = overlap;
+                        best_combined = combined;
+                    } else if (memcmp(strings[i].b + SIZE(strings[i].b) - overlap,
+                               strings[j].b,
+                               overlap * sizeof(symbol)) == 0) {
+                        int combined = SIZE(strings[i].b) + SIZE(strings[j].b);
+                        if (best_overlap == overlap) {
+                            if (combined >= best_combined) continue;
+                        }
+                        best_a = i;
+                        best_b = j;
+                        best_overlap = overlap;
+                        best_combined = combined;
+                    }
+                }
+            }
+        }
+        if (best_overlap == 0) break;
+        --n_strings;
+        w(g, "~M#define s_");
+        write_int(g, strings[best_b].n);
+        w(g, " (s_");
+        write_int(g, strings[best_a].n);
+        w(g, " + ");
+        write_int(g, SIZE(strings[best_a].b) - best_overlap);
+        w(g, ")~N");
+        strings[best_a].b =
+            add_to_b(strings[best_a].b, strings[best_b].b + best_overlap,
+                     SIZE(strings[best_b].b) - best_overlap);
+        lose_b(strings[best_b].b);
+        strings[best_b] = strings[n_strings];
+    }
+
+    for (int i = 0; i < n_strings; ++i) {
+        w(g, "~Mstatic const symbol s_");
+        write_int(g, strings[i].n);
+        w(g, "[] = ");
+        wlitarray(g, strings[i].b);
+        w(g, ";~N");
+        lose_b(strings[i].b);
+    }
+    FREE(strings);
+
+    g->outbuf = saved_outbuf;
 }
 
 static void generate_amongs(struct generator * g) {
-    struct str * s = g->outbuf;
+    struct str * saved_outbuf = g->outbuf;
     g->outbuf = g->declarations;
     for (struct among * x = g->analyser->amongs; x; x = x->next) {
-        if (x->used) generate_among_table(g, x);
+        if (x->used && !x->duplicate) generate_among_table(g, x);
     }
-    g->outbuf = s;
+    g->outbuf = saved_outbuf;
 }
 
 static void set_bit(symbol * b, int i) { b[i >> 3] |= 1 << (i & 7); }
@@ -1849,10 +2732,16 @@ static void generate_grouping_table(struct generator * g, struct grouping * q) {
         write_int(g, map[i]);
     }
     if (g->options->coverage) {
+        int grouping_number = q->name->count;
+        if (grouping_number > 255) grouping_number = 255;
+        w(g, ", ");
+        wlitch(g, grouping_number);
+
         char buf[1024];
         checked_snprintf(buf, sizeof(buf), "%s:%d: grouping %.*s",
                          g->analyser->tokeniser->file, q->line_number,
                          SIZE(q->name->s), q->name->s);
+
         for (const char * p = buf; *p; ++p) {
             w(g, ", ");
             wlitch(g, (int)*p);
@@ -1865,67 +2754,60 @@ static void generate_grouping_table(struct generator * g, struct grouping * q) {
 }
 
 static void generate_groupings(struct generator * g) {
-    struct str * s = g->outbuf;
+    struct str * saved_outbuf = g->outbuf;
     g->outbuf = g->declarations;
     for (struct grouping * q = g->analyser->groupings; q; q = q->next) {
         generate_grouping_table(g, q);
     }
-    g->outbuf = s;
+    g->outbuf = saved_outbuf;
 }
 
 static void generate_create(struct generator * g) {
+    if (g->analyser->variable_count == 0) return;
+
     w(g, "~N"
          "extern struct SN_env * ~pcreate_env(void) {~N~+");
 
-    if (g->analyser->variable_count == 0) {
-        w(g, "~Mreturn SN_new_env(sizeof(struct SN_env));~N");
+    if (g->analyser->name_count[t_string] == 0) {
+        w(g, "~Mreturn SN_new_env(sizeof(SN_local));~N");
     } else {
         w(g, "~Mstruct SN_env * z = SN_new_env(sizeof(SN_local));~N"
              "~Mif (z) {~N~+");
+
+        // SN_new_env() initialises the allocated size to all-zero-bits, so
+        // assigning NULL here is only needed on platforms where NULL doesn't
+        // have an all-zero-bits representation in memory.  The C standard
+        // allows that, but there don't seem to be any current such platforms.
+        // There doesn't seem an easy way to only enable this code when it is
+        // useful though.
+        //
+        // To simplify handling a failure to allocate a string variable, if
+        // there are multiple non-localised string variables we initialise them
+        // all to NULL first, then try to allocate them in a second pass.  We
+        // don't need to do this when there's only one because in that case we
+        // can't have a partially successful allocation.
+        if (g->analyser->name_count[t_string] > 1) {
+            for (struct name * name = g->analyser->names; name; name = name->next) {
+                if (!name->local_to && name->type == t_string) {
+                    w(g, "~M");
+                    write_varref(g, name);
+                    w(g, " = NULL;~N");
+                }
+            }
+            write_newline(g);
+        }
 
         for (struct name * name = g->analyser->names; name; name = name->next) {
             if (!name->local_to) {
                 switch (name->type) {
                     case t_string:
-                        w(g, "~M");
+                        w(g, "~Mif ((");
                         write_varref(g, name);
-                        w(g, " = NULL;~N");
+                        w(g, " = create_s()) == NULL) {~N~+"
+                             "~M~pclose_env(z);~N"
+                             "~Mreturn NULL;~N~-"
+                             "~M}~N");
                         break;
-                    case t_integer:
-                        w(g, "~M");
-                        write_varref(g, name);
-                        w(g, " = 0;~N");
-                        break;
-                    case t_boolean:
-                        w(g, "~M");
-                        write_varref(g, name);
-                        if (g->options->target_lang == LANG_CPLUSPLUS) {
-                            w(g, " = false;~N");
-                        } else {
-                            w(g, " = 0;~N");
-                        }
-                        break;
-                }
-            }
-        }
-
-        if (g->analyser->name_count[t_string] > 0) {
-            write_newline(g);
-
-            // To simplify error handling, we initialise all strings to NULL
-            // above, then try to allocate them in a second pass.
-            for (struct name * name = g->analyser->names; name; name = name->next) {
-                if (!name->local_to) {
-                    switch (name->type) {
-                        case t_string:
-                            w(g, "~Mif ((");
-                            write_varref(g, name);
-                            w(g, " = create_s()) == NULL) {~N~+"
-                                 "~M~pclose_env(z);~N"
-                                 "~Mreturn NULL;~N~-"
-                                 "~M}~N");
-                            break;
-                    }
                 }
             }
         }
@@ -1938,21 +2820,20 @@ static void generate_create(struct generator * g) {
 }
 
 static void generate_close(struct generator * g) {
+    // If there are no string variables then our close_env is just
+    // SN_delete_env so we #define it to that in the header.
+    if (g->analyser->name_count[t_string] == 0) return;
+
     w(g, "~Nextern void ~pclose_env(struct SN_env * z) {~N~+");
+    w(g, "~Mif (!z) return;~N");
 
-    if (g->analyser->name_count[t_string] > 0) {
-        w(g, "~Mif (!z) return;~N");
-
-        for (struct name * name = g->analyser->names; name; name = name->next) {
-            if (!name->local_to && name->type == t_string) {
-                w(g, "~Mlose_s(");
-                write_varref(g, name);
-                w(g, ");~N");
-            }
+    for (struct name * name = g->analyser->names; name; name = name->next) {
+        if (!name->local_to && name->type == t_string) {
+            w(g, "~Mlose_s(");
+            write_varref(g, name);
+            w(g, ");~N");
         }
     }
-
-    // Note: SN_delete_env() no-ops if z is NULL so we don't to gate this call.
     w(g, "~MSN_delete_env(z);~N"
          "~-}~N~N");
 }
@@ -1992,12 +2873,22 @@ static void generate_header_file(struct generator * g) {
     if (o->target_lang == LANG_C) {
         w(g, "#ifdef __cplusplus~N"
              "extern \"C\" {~N"
-             "#endif~N");            /* for C++ */
+             "#endif~N~N");          /* for C++ */
 
-        w(g, "~N"
-             "extern struct SN_env * ~pcreate_env(void);~N"
-             "extern void ~pclose_env(struct SN_env * z);~N"
-             "~N");
+        w(g, "struct SN_env;~N~N");
+
+        if (g->analyser->variable_count == 0) {
+            w(g, "#define ~pcreate_env SN_new_env_no_vars~N");
+        } else {
+            w(g, "extern struct SN_env * ~pcreate_env(void);~N");
+        }
+
+        if (g->analyser->name_count[t_string] == 0) {
+            w(g, "#define ~pclose_env SN_delete_env~N");
+        } else {
+            w(g, "extern void ~pclose_env(struct SN_env * z);~N");
+        }
+        write_newline(g);
     }
 
     const char * vp = o->variables_prefix;
@@ -2100,7 +2991,7 @@ static void generate_header_file(struct generator * g) {
 
         for (struct name * name = g->analyser->names; name; name = name->next) {
             if (!name->local_to && name->type == t_boolean) {
-                if (g->options->target_lang == LANG_CPLUSPLUS) {
+                if (o->target_lang == LANG_CPLUSPLUS) {
                     w(g, "~Mbool ");
                 } else {
                     w(g, "~Munsigned char ");
@@ -2141,8 +3032,8 @@ static void generate_header_file(struct generator * g) {
         for (struct name * q = g->analyser->names; q; q = q->next) {
             if (!q->local_to && q->type == t_external) {
                 w(g, "~Mstatic int ");
-                if (g->options->externals_prefix) {
-                    write_string(g, g->options->externals_prefix);
+                if (o->externals_prefix) {
+                    write_string(g, o->externals_prefix);
                 }
                 write_s(g, q->s);
                 w(g, "(struct SN_env * z);~N~N");
@@ -2167,25 +3058,33 @@ static void generate_header_file(struct generator * g) {
                  "~Mthrow;~N"
                  "~-~M}~N");
         }
+        if (o->encoding == ENC_WIDECHARS) {
+            g->S[0] = "std::wstring";
+            g->S[1] = "wchar_t";
+        } else {
+            g->S[0] = "std::string";
+            g->S[1] = "char";
+        }
         w(g, "~-~M}~N~N"
              "~M~~~n() {~N~+"
              "~Mclose_env();~N"
              "~-~M}~N~N"
-             "~Mstd::string operator()(const std::string& word) override {~N~+"
+             "~M~S0 operator()(const ~S0& word) override {~N~+"
              "~Mstruct SN_env* z = &(zlocal.z);~N"
              "~Mconst symbol* s = reinterpret_cast<const symbol*>(word.data());~N"
-             "~Mreplace_s(z, 0, z->l, word.size(), s);~N"
+             "~Mint s_size = word.size() > INT_MAX ? INT_MAX : word.size();~N"
+             "~Mreplace_s(z, 0, z->l, s_size, s);~N"
              "~Mz->c = 0;~N"
              "~M");
         write_string(g, o->package);
         write_string(g, "::");
         write_s(g, o->name);
         write_string(g, "::");
-        if (g->options->externals_prefix) {
-            write_string(g, g->options->externals_prefix);
+        if (o->externals_prefix) {
+            write_string(g, o->externals_prefix);
         }
         w(g, "stem(z);~N"
-             "~Mreturn std::string(reinterpret_cast<const char*>(z->p), SIZE(z->p));~N"
+             "~Mreturn ~S0(reinterpret_cast<const ~S1*>(z->p), SIZE(z->p));~N"
              "~-~M}~N"
              "~-~M};~N~N");
 
@@ -2194,6 +3093,12 @@ static void generate_header_file(struct generator * g) {
 }
 
 extern void generate_program_c(struct generator * g) {
+    // Build the among tables first as we need the among_function_scenario
+    // list to generate code for amongs with functions.
+    for (struct among * x = g->analyser->amongs; x; x = x->next) {
+        build_among_table(g, x);
+    }
+
     g->outbuf = str_new();
     g->failure_str = str_new();
     write_start_comment(g, "/* ", " */");
@@ -2207,6 +3112,7 @@ extern void generate_program_c(struct generator * g) {
         generate(g, p);
     }
 
+    generate_stringliterals(g);
     generate_amongs(g);
     generate_groupings(g);
 

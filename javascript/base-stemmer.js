@@ -20,8 +20,8 @@ export default class BaseStemmer {
         this.c = 0;
         this.limit = this.current.length;
         this.limit_backward = 0;
-        this.bra = this.c;
-        this.ket = this.limit;
+        this.bra = 0;
+        this.ket = 0;
     }
 
     /**
@@ -206,14 +206,10 @@ export default class BaseStemmer {
      * @param {string} s
      * @return {boolean}
      */
-    eq_s(s)
-    {
+    eq_s(s) {
         /** @protected */
         if (this.limit - this.c < s.length) return false;
-        if (!this.current.startsWith(s, this.c))
-        {
-            return false;
-        }
+        if (!this.current.startsWith(s, this.c)) return false;
         this.c += s.length;
         return true;
     }
@@ -222,25 +218,20 @@ export default class BaseStemmer {
      * @param {string} s
      * @return {boolean}
      */
-    eq_s_b(s)
-    {
+    eq_s_b(s) {
         /** @protected */
         if (this.c - this.limit_backward < s.length) return false;
-        if (!this.current.endsWith(s, this.c))
-        {
-            return false;
-        }
+        if (!this.current.endsWith(s, this.c)) return false;
         this.c -= s.length;
         return true;
     }
 
     /**
      * @param {Array<Array<string|number>>} v
-     * @param {?function(): boolean} call_among_func
+     * @param {function(): boolean} [call_among_func]
      * @return {number}
      */
-    find_among(v, call_among_func)
-    {
+    find_among(v, call_among_func) {
         /** @protected */
         let i = 0;
         let j = v.length;
@@ -253,39 +244,30 @@ export default class BaseStemmer {
 
         let first_key_inspected = false;
 
-        while (true)
-        {
+        while (true) {
             const k = i + ((j - i) >>> 1);
             let diff = 0;
             let common = common_i < common_j ? common_i : common_j; // smaller
-            // w[0]: string, w[1]: substring_i, w[2]: result, w[3]: function (optional)
+            // w[0]: string, w[1]: result, w[2]: substring_i (optional), w[3]: function (optional)
             const w = v[k];
-            let i2;
-            // @ts-expect-error: w[0] always string.
-            for (i2 = common; i2 < w[0].length; i2++)
-            {
-                if (c + common === l)
-                {
+            const s = /**@type{string}*/ (w[0]);
+            for (let i2 = common; i2 < s.length; i2++) {
+                if (c + common === l) {
                     diff = -1;
                     break;
                 }
-                // @ts-expect-error: w[0] always string.
-                diff = this.current.charCodeAt(c + common) - w[0].charCodeAt(i2);
+                diff = this.current.charCodeAt(c + common) - s.charCodeAt(i2);
                 if (diff !== 0) break;
                 common++;
             }
-            if (diff < 0)
-            {
+            if (diff < 0) {
                 j = k;
                 common_j = common;
-            }
-            else
-            {
+            } else {
                 i = k;
                 common_i = common;
             }
-            if (j - i <= 1)
-            {
+            if (j - i <= 1) {
                 if (i > 0) break; // v->s has been inspected
                 if (j === i) break; // only one item in v
 
@@ -297,39 +279,32 @@ export default class BaseStemmer {
                 first_key_inspected = true;
             }
         }
-        do {
+        while (true) {
             const w = v[i];
-            // @ts-expect-error: w[0] always string.
-            if (common_i >= w[0].length)
-            {
-                // @ts-expect-error: w[0] always string.
-                this.c = c + w[0].length;
-                // @ts-expect-error: w[2] always number.
-                if (w.length < 4) return w[2];
-                // @ts-expect-error: w[3] always number.
-                this.af = w[3];
+            const len = /**@type {string}*/ (w[0]).length;
+            if (common_i >= len) {
+                this.c = c + len;
+                if (w.length < 4) return /**@type {number}*/ (w[1]);
+                this.af = /**@type {number}*/ (w[3]);
                 // @ts-expect-error: call_among_func never null here.
-                if (call_among_func.call(this))
-                {
-                    // @ts-expect-error: w[0] always string.
-                    this.c = c + w[0].length;
-                    // @ts-expect-error: w[3] always number.
-                    return w[2];
+                if (call_among_func.call(this)) {
+                    this.c = c + len;
+                    return /**@type {number}*/ (w[1]);
                 }
             }
-            // @ts-expect-error: w[1] always number.
-            i = w[1];
-        } while (i >= 0);
-        return 0;
+            // Tests for undefined (if w.length < 2) or 0.
+            if (!w[2]) return 0;
+            i -= /**@type {number}*/ (w[2]);
+        }
     }
 
     // find_among_b is for backwards processing. Same comments apply
     /**
      * @param {Array<Array<string|number>>} v
-     * @param {?function(): boolean} call_among_func
+     * @param {function(): boolean} [call_among_func]
+     * @return {number}
      */
-    find_among_b(v, call_among_func)
-    {
+    find_among_b(v, call_among_func) {
         /** @protected */
         let i = 0;
         let j = v.length
@@ -342,66 +317,52 @@ export default class BaseStemmer {
 
         let first_key_inspected = false;
 
-        while (true)
-        {
+        while (true) {
             const k = i + ((j - i) >> 1);
             let diff = 0;
             let common = common_i < common_j ? common_i : common_j;
             const w = v[k];
-            let i2;
-            // @ts-expect-error: w[0] always string.
-            for (i2 = w[0].length - 1 - common; i2 >= 0; i2--)
-            {
-                if (c - common === lb)
-                {
+            const s = /**@type{string}*/ (w[0]);
+            for (let i2 = s.length - 1 - common; i2 >= 0; i2--) {
+                if (c - common === lb) {
                     diff = -1;
                     break;
                 }
-                // @ts-expect-error: w[0] always string.
-                diff = this.current.charCodeAt(c - 1 - common) - w[0].charCodeAt(i2);
+                diff = this.current.charCodeAt(c - 1 - common) - s.charCodeAt(i2);
                 if (diff !== 0) break;
                 common++;
             }
-            if (diff < 0)
-            {
+            if (diff < 0) {
                 j = k;
                 common_j = common;
-            }
-            else
-            {
+            } else {
                 i = k;
                 common_i = common;
             }
-            if (j - i <= 1)
-            {
+            if (j - i <= 1) {
                 if (i > 0) break;
                 if (j === i) break;
                 if (first_key_inspected) break;
                 first_key_inspected = true;
             }
         }
-        do {
+        while (true) {
             const w = v[i];
-            // @ts-expect-error: w[0] always string.
-            if (common_i >= w[0].length)
-            {
-                // @ts-expect-error: w[0] always string.
-                this.c = c - w[0].length;
-                if (w.length < 4) return w[2];
-                // @ts-expect-error: w[3] always number.
-                this.af = w[3];
+            const len = /**@type {string}*/ (w[0]).length;
+            if (common_i >= len) {
+                this.c = c - len;
+                if (w.length < 4) return /**@type {number}*/ (w[1]);
+                this.af = /**@type {number}*/ (w[3]);
                 // @ts-expect-error: call_among_func never null here.
-                if (call_among_func.call(this))
-                {
-                    // @ts-expect-error: w[0] always string.
-                    this.c = c - w[0].length;
-                    return w[2];
+                if (call_among_func.call(this)) {
+                    this.c = c - len;
+                    return /**@type {number}*/ (w[1]);
                 }
             }
-            // @ts-expect-error: w[1] always number.
-            i = w[1];
-        } while (i >= 0);
-        return 0;
+            // Tests for undefined (if w.length < 2) or 0.
+            if (!w[2]) return 0;
+            i -= /**@type {number}*/ (w[2]);
+        }
     }
 
     /* to replace chars between c_bra and c_ket in this.current by the
@@ -413,8 +374,7 @@ export default class BaseStemmer {
      * @param {string} s
      * @return {number}
      */
-    #replace_s(c_bra, c_ket, s)
-    {
+    #replace_s(c_bra, c_ket, s) {
         const adjustment = s.length - (c_ket - c_bra);
         this.current = this.current.slice(0, c_bra) + s + this.current.slice(c_ket);
         this.limit += adjustment;
@@ -425,8 +385,7 @@ export default class BaseStemmer {
 
     /**
      */
-    #slice_check()
-    {
+    #slice_check() {
         console.assert(this.bra >= 0);
         console.assert(this.bra <= this.ket);
         console.assert(this.ket <= this.limit);
@@ -436,8 +395,7 @@ export default class BaseStemmer {
     /**
      * @param {string} s
      */
-    slice_from(s)
-    {
+    slice_from(s) {
         /** @protected */
         this.#slice_check();
         this.#replace_s(this.bra, this.ket, s);
@@ -446,8 +404,7 @@ export default class BaseStemmer {
 
     /**
      */
-    slice_del()
-    {
+    slice_del() {
         /** @protected */
         this.slice_from("");
     }
@@ -457,8 +414,7 @@ export default class BaseStemmer {
      * @param {number} c_ket
      * @param {string} s
      */
-    insert(c_bra, c_ket, s)
-    {
+    insert(c_bra, c_ket, s) {
         /** @protected */
         const adjustment = this.#replace_s(c_bra, c_ket, s);
         if (c_bra <= this.bra) this.bra += adjustment;
@@ -468,8 +424,7 @@ export default class BaseStemmer {
     /**
      * @return {string}
      */
-    slice_to()
-    {
+    slice_to() {
         /** @protected */
         this.#slice_check();
         return this.current.slice(this.bra, this.ket);

@@ -1,9 +1,9 @@
+#include "snowball_runtime.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "snowball_runtime.h"
 
 #ifdef SNOWBALL_RUNTIME_THROW_EXCEPTIONS
 # include <new>
@@ -20,7 +20,16 @@
     } while (0)
 #endif
 
-#define CREATE_SIZE 1
+#define HEAD (2 * sizeof(int))
+
+/* Note that sizeof(symbol) should divide HEAD without remainder, otherwise
+ * there is an alignment problem.
+ *
+ * We support C90 here so use a typedef trick instead of static_assert.
+ */
+typedef int sizeof_symbol_divides_head[(HEAD % sizeof(symbol) == 0) ? 1 : -1];
+
+#define CREATE_SIZE 31
 
 extern symbol * create_s(void) {
     symbol * p;
@@ -40,14 +49,15 @@ extern void lose_s(symbol * p) {
 
 /*
    new_p = skip_utf8(p, c, l, n); skips n characters forwards from p + c.
-   new_p is the new position, or -1 on failure.
+   new_p is the new position, or -1 on failure (if c would be > l).
+
+   Caller ensures n >= 0.
 
    -- used to implement hop and next in the utf8 case.
 */
 
 extern int skip_utf8(const symbol * p, int c, int limit, int n) {
     int b;
-    if (n < 0) return -1;
     for (; n > 0; n--) {
         if (c >= limit) return -1;
         b = p[c++];
@@ -65,14 +75,15 @@ extern int skip_utf8(const symbol * p, int c, int limit, int n) {
 
 /*
    new_p = skip_b_utf8(p, c, lb, n); skips n characters backwards from p + c - 1
-   new_p is the new position, or -1 on failure.
+   new_p is the new position, or -1 on failure (if c would be < lb).
+
+   Caller ensures n >= 0.
 
    -- used to implement hop and next in the utf8 case.
 */
 
 extern int skip_b_utf8(const symbol * p, int c, int limit, int n) {
     int b;
-    if (n < 0) return -1;
     for (; n > 0; n--) {
         if (c <= limit) return -1;
         b = p[--c];
@@ -136,9 +147,15 @@ static int get_b_utf8(const symbol * p, int c, int lb, int * slot) {
 }
 
 #ifdef SNOWBALL_COVERAGE
+/* The grouping number gets stored in a byte, clamped to 255. */
+static char grouping_seen[255];
+
 static void report_coverage(const unsigned char * s, int min, int max, int ch, const unsigned char * p, int w) {
     int i = 0;
+    int j;
     int outof = 0;
+    const unsigned char * loc = s + (max - min + 8) / 8;
+    int grouping_number = *loc++;
     /* Adjust ch be an offset from min if it's past the end of the range.  If
      * we already subtracted min then this will condition will be false.  Only
      * needed for the "out" case but the condition can never be true for the
@@ -146,19 +163,45 @@ static void report_coverage(const unsigned char * s, int min, int max, int ch, c
      */
     if (ch > max) ch -= min;
     /* Find the index of this character in the grouping. */
-    for (int j = 0; j != max - min; ++j) {
+    for (j = 0; j != max - min; ++j) {
         if (s[j >> 3] & (0X1 << (j & 0X7))) {
             ++outof;
             if (j < ch) ++i;
         }
     }
-    s += (max - min + 8) / 8;
-    fprintf(stderr, "%s index %d of %d '%.*s'\n", s, i, outof + 1, w, p);
+    if (grouping_number < (int)sizeof(grouping_seen) &&
+        grouping_seen[grouping_number] == 0) {
+        /* Report every entry once, then unused cases will appear (and we can
+         * decrement each count when generating the coverage report).
+         */
+        int k = 0;
+        for (j = 0; j != max - min; ++j) {
+            if (s[j >> 3] & (0X1 << (j & 0X7))) {
+                fprintf(stderr, "%s index %d of %d '", loc, k, outof + 1);
+                int codepoint = j + min;
+                if (codepoint < 0x80) {
+                    putc(codepoint, stderr);
+                } else if (codepoint < 0x800) {
+                    putc((codepoint >> 6) | 0xC0, stderr);
+                    putc((codepoint & 0x3F) | 0x80, stderr);
+                } else {
+                    putc((codepoint >> 12) | 0xE0, stderr);
+                    putc(((codepoint >> 6) & 0x3F) | 0x80, stderr);
+                    putc((codepoint & 0x3F) | 0x80, stderr);
+                }
+                fprintf(stderr, "'\n");
+                ++k;
+            }
+        }
+        grouping_seen[grouping_number] = 1;
+    }
+    fprintf(stderr, "%s index %d of %d '%.*s'\n", loc, i, outof + 1, w, p);
 }
 
 static void report_coverage_nomatch(const unsigned char * s, int min, int max) {
-    s += (max - min + 8) / 8;
-    fprintf(stderr, "%s no match\n", s);
+    const unsigned char * loc = s + (max - min + 8) / 8;
+    ++loc;
+    fprintf(stderr, "%s no match\n", loc);
 }
 #endif
 
@@ -306,162 +349,137 @@ extern int eq_v_b(struct SN_env * z, const symbol * p) {
     return eq_s_b(z, SIZE(p), p);
 }
 
-extern int find_among(struct SN_env * z, const struct among * v, int v_size,
-                      int (*call_among_func)(struct SN_env*)) {
-
-    int i = 0;
-    int j = v_size;
-
-    int c = z->c; int l = z->l;
-    const symbol * q = z->p + c;
-
-    const struct among * w;
-
-    int common_i = 0;
-    int common_j = 0;
-
-    int first_key_inspected = 0;
-
-#ifdef SNOWBALL_COVERAGE
-    if (v[v_size * 2].s_size == -1)
-        fprintf(stderr, "%s: among %d no match impossible\n", v[v_size * 2].s, v[v_size].s_size);
+#ifdef SNOWBALL_WIDE
+# define GET_A(X) ((X)[1])
+# define GET_B(X) ((X)[2])
+# define NWAY(X) ((X) + 3)
+# define SEG_RESULT(X) (X)[3]
+# define SEG_DATA(X) ((X) + 4)
+#else
+# define GET_A(X) ((X)[1] & 0xff)
+# define GET_B(X) ((X)[1] >> 8)
+# define NWAY(X) ((X) + 2)
+# define SEG_RESULT(X) (X)[2]
+# define SEG_DATA(X) ((X) + 3)
 #endif
-    while (1) {
-        int k = i + ((j - i) >> 1);
-        int diff = 0;
-        int common = common_i < common_j ? common_i : common_j; /* smaller */
-        w = v + k;
-        {
-            int i2; for (i2 = common; i2 < w->s_size; i2++) {
-                if (c + common == l) { diff = -1; break; }
-                diff = q[common] - w->s[i2];
-                if (diff != 0) break;
-                common++;
-            }
-        }
-        if (diff < 0) {
-            j = k;
-            common_j = common;
-        } else {
-            i = k;
-            common_i = common;
-        }
-        if (j - i <= 1) {
-            if (i > 0) break; /* v->s has been inspected */
-            if (j == i) break; /* only one item in v */
 
-            /* - but now we need to go round once more to get
-               v->s inspected. This looks messy, but is actually
-               the optimal approach.  */
-
-            if (first_key_inspected) break;
-            first_key_inspected = 1;
-        }
+static int seg_matches(const symbol * p, const unsigned short * x, int len) {
+    int i;
+    x = SEG_DATA(x);
+    if (sizeof(symbol) == 1) {
+        return memcmp(p, x, len) == 0;
     }
-    w = v + i;
+    for (i = 0; i < len; ++i) {
+        if (p[i] != x[i]) return 0;
+    }
+    return 1;
+}
+
+extern int find_among(struct SN_env * z, const unsigned short * v) {
+    int c = z->c;
+    int l = z->l;
+    int o = 0;
+    int r = 0;
     while (1) {
-        if (common_i >= w->s_size) {
-            z->c = c + w->s_size;
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d : %d of %d string '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
-            if (!w->function) return w->result;
-            z->af = w->function;
-            if (call_among_func(z)) {
-                z->c = c + w->s_size;
-#ifdef SNOWBALL_COVERAGE
-                fprintf(stderr, "%s: among %d : %d of %d func-t '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
-                return w->result;
+        if (o < 0) {
+            z->c = c;
+            return -o;
+        }
+        if (v[o]) {
+            r = v[o];
+            z->c = c;
+        }
+        if (c < l) {
+            symbol a = GET_A(v + o);
+            symbol b = GET_B(v + o);
+            if (b == 0) {
+                /* Substring segment. */
+                int old_c = c;
+                c += a;
+                if (c <= l && seg_matches(z->p + old_c, v + o, a)) {
+                    o = (short)SEG_RESULT(v + o);
+                    assert(o);
+                    continue;
+                }
+            } else {
+                symbol ch = z->p[c];
+                if (b < a) {
+                    /* 2-way dispatch. */
+                    if (ch == a || ch == b) {
+                        o = (short)NWAY(v + o)[(ch == a)];
+                        if (o) {
+                            ++c;
+                            continue;
+                        }
+                    }
+                } else {
+                    /* N-way dispatch. */
+                    if (ch >= a && ch <= b) {
+                        o = (short)NWAY(v + o)[ch - a];
+                        if (o) {
+                            ++c;
+                            continue;
+                        }
+                    }
+                }
             }
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d : %d of %d func-f '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
         }
-        if (!w->substring_i) {
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d no match\n", v[v_size * 2].s, v[v_size * 2].s_size);
-#endif
-            return 0;
-        }
-        w += w->substring_i;
+        return r;
     }
 }
 
 /* find_among_b is for backwards processing. Same comments apply */
-
-extern int find_among_b(struct SN_env * z, const struct among * v, int v_size,
-                        int (*call_among_func)(struct SN_env*)) {
-
-    int i = 0;
-    int j = v_size;
-
-    int c = z->c; int lb = z->lb;
-    const symbol * q = z->p + c - 1;
-
-    const struct among * w;
-
-    int common_i = 0;
-    int common_j = 0;
-
-    int first_key_inspected = 0;
-
-#ifdef SNOWBALL_COVERAGE
-    if (v[v_size * 2].s_size == -1)
-        fprintf(stderr, "%s: among %d no match impossible\n", v[v_size * 2].s, v[v_size].s_size);
-#endif
+extern int find_among_b(struct SN_env * z, const unsigned short * v) {
+    int c = z->c;
+    int lb = z->lb;
+    int o = 0;
+    int r = 0;
     while (1) {
-        int k = i + ((j - i) >> 1);
-        int diff = 0;
-        int common = common_i < common_j ? common_i : common_j;
-        w = v + k;
-        {
-            int i2; for (i2 = w->s_size - 1 - common; i2 >= 0; i2--) {
-                if (c - common == lb) { diff = -1; break; }
-                diff = q[- common] - w->s[i2];
-                if (diff != 0) break;
-                common++;
+        if (o < 0) {
+            z->c = c;
+            return -o;
+        }
+        if (v[o]) {
+            r = v[o];
+            z->c = c;
+        }
+        if (c > lb) {
+            symbol a = GET_A(v + o);
+            symbol b = GET_B(v + o);
+            if (b == 0) {
+                /* Substring segment. */
+                c -= a;
+                if (c >= lb && seg_matches(z->p + c, v + o, a)) {
+                    o = (short)SEG_RESULT(v + o);
+                    assert(o);
+                    continue;
+                }
+            } else {
+                symbol ch = z->p[c - 1];
+                if (b < a) {
+                    /* 2-way dispatch. */
+                    if (ch == a || ch == b) {
+                        o = (short)NWAY(v + o)[(ch == a)];
+                        if (o) {
+                            --c;
+                            continue;
+                        }
+                    }
+                } else {
+                    /* N-way dispatch. */
+                    if (ch >= a && ch <= b) {
+                        o = (short)NWAY(v + o)[ch - a];
+                        if (o) {
+                            --c;
+                            continue;
+                        }
+                    }
+                }
             }
         }
-        if (diff < 0) { j = k; common_j = common; }
-                 else { i = k; common_i = common; }
-        if (j - i <= 1) {
-            if (i > 0) break;
-            if (j == i) break;
-            if (first_key_inspected) break;
-            first_key_inspected = 1;
-        }
-    }
-    w = v + i;
-    while (1) {
-        if (common_i >= w->s_size) {
-            z->c = c - w->s_size;
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d : %d of %d string '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
-            if (!w->function) return w->result;
-            z->af = w->function;
-            if (call_among_func(z)) {
-#ifdef SNOWBALL_COVERAGE
-                fprintf(stderr, "%s: among %d : %d of %d func-t '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
-                z->c = c - w->s_size;
-                return w->result;
-            }
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d : %d of %d func-f '%.*s'\n", w[v_size].s, w[v_size].s_size, w[v_size].result, v_size, w->s_size, w->s);
-#endif
-        }
-        if (!w->substring_i) {
-#ifdef SNOWBALL_COVERAGE
-            fprintf(stderr, "%s: among %d no match\n", v[v_size * 2].s, v[v_size * 2].s_size);
-#endif
-            return 0;
-        }
-        w += w->substring_i;
+        return r;
     }
 }
-
 
 /* Increase the size of the buffer pointed to by p to at least n symbols.
  * On success, returns 0.  If insufficient memory, returns -1.

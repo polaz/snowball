@@ -2,7 +2,7 @@
 
 # After changing this, run `make update_version` to update various sources
 # which hard-code it.
-SNOWBALL_VERSION = 3.0.0
+SNOWBALL_VERSION = 3.1.1
 
 ifeq ($(OS),Windows_NT)
 EXEEXT = .exe
@@ -32,7 +32,35 @@ ada_src_dir = $(ada_src_main_dir)/algorithms
 
 # C
 
+ARFLAGS = -cr
 c_src_dir = src_c
+ifeq '$(filter %cl,$(CC))' ''
+o_for_obj = -o
+o_for_exe = -o
+ARFLAGS_ = $(ARFLAGS) # Includes a trailing space.
+else
+o_for_obj = -Fo:
+o_for_exe = -Fe:
+AR = lib -nologo
+# Frustratingly, LIB.EXE's `-out:` option doesn't allow a space to follow
+# (unlike CL.EXE's `-Fo:` and `-Fe:` options) so ARFLAGS_ has to be used
+# without a space after it.  For more sensible compilers ARFLAGS_ is set
+# to include a trailing space.
+ARFLAGS_ = -out:
+endif
+
+# C++
+
+CXX ?= c++
+CXXFLAGS=-g -O2 -W -Wall -Wcast-qual -Wmissing-declarations -Wshadow $(WERROR)
+cxx_src_dir = cxx
+
+ifdef SNOWBALL_WIDE
+CXXFLAGS += -DSNOWBALL_WIDE
+cxx_encoding_opt := -w
+else
+cxx_encoding_opt := -u
+endif
 
 # C#
 
@@ -113,8 +141,11 @@ DIFF = diff
 ifeq ($(OS),Windows_NT)
 DIFF = diff --strip-trailing-cr
 endif
-ICONV = iconv
-#ICONV = python ./iconv.py
+
+# If iconv isn't installed you can use iconv.py instead via:
+#
+#   make check ICONV='python iconv.py'
+ICONV ?= iconv
 
 # Where the data files are located - assumes their repo is checked out as
 # a sibling to this one.
@@ -172,7 +203,7 @@ COMPILER_HEADERS = compiler/header.h \
 # C
 
 RUNTIME_SOURCES  = runtime/api.c \
-		   runtime/utilities.c
+		   runtime/snowball_runtime.c
 
 RUNTIME_HEADERS  = runtime/api.h \
 		   runtime/snowball_runtime.h
@@ -184,6 +215,17 @@ LIBSTEMMER_EXTRA = $(MODULES) libstemmer/libstemmer_c.in
 
 STEMWORDS_SOURCES = examples/stemwords.c
 STEMTEST_SOURCES = tests/stemtest.c
+
+# C++
+
+CXX_STEMWORDS_SOURCES = $(cxx_src_dir)/stemwords.cxx
+CXX_RUNTIME_SOURCES = $(cxx_src_dir)/stemmer.cxx $(cxx_src_dir)/snowball_runtime.cxx
+CXX_SOURCES = $(libstemmer_algorithms:%=$(cxx_src_dir)/%_stemmer.cxx)
+CXX_HEADERS = $(libstemmer_algorithms:%=$(cxx_src_dir)/%_stemmer.h)
+
+CXX_STEMWORDS_OBJECTS = $(CXX_STEMWORDS_SOURCES:.cxx=.o)
+CXX_RUNTIME_OBJECTS = $(patsubst %.c,%.o,$(patsubst %.cxx,%.o,$(CXX_RUNTIME_SOURCES)))
+CXX_OBJECTS = $(CXX_SOURCES:.cxx=.o)
 
 # C#
 
@@ -310,22 +352,25 @@ update_version:
 		csharp/Snowball/AssemblyInfo.cs \
 		dart/pubspec.yaml \
 		python/setup.py
+	perl -pi -e 's/(libstemmer_c-)\d+\.\d+.\d+/$${1}$(SNOWBALL_VERSION)/' README.rst
 
 # Generate and build for all target languages.
-everything: ada all csharp dart go java js pascal python rust zig
+everything: ada all cxx csharp dart go java js pascal python rust zig
 
 # Generate code for all languages.  Override build tools to do as little code
 # building as possible.
 generate: gprbuild=perl -e '$$ARGV[0] eq "-Pgenerate" and unshift @ARGV, "gprbuild" and exec @ARGV' --
-generate: mcs=:
+generate: CXX=:
+generate: MCS=:
 generate: DART=:
 generate: go=:
 generate: JAVAC=:
+generate: FPC=:
 generate: everything
 
 # The directories where generated code goes for all languages.
 ALL_CODE_DIRS := \
-	ada src_c csharp dart go java js_out pascal python_out rust zig
+	ada src_c cxx csharp dart go java js_out pascal python_out rust zig
 
 # When runtime tests are enabled, this gets overridden by overrides.mk.
 BASELINE ?= baseline
@@ -333,7 +378,7 @@ BASELINE ?= baseline
 baseline-create: generate
 	rm -rf *.$(BASELINE)
 	for d in $(ALL_CODE_DIRS) ; do cp -a $$d $$d.$(BASELINE) ; done
-	rm -rf *.$(BASELINE)/*.o ada.$(BASELINE)/obj pascal.$(BASELINE)/*.ppu
+	rm -rf *.$(BASELINE)/*.o ada.$(BASELINE)/obj pascal.$(BASELINE)/*.ppu *.$(BASELINE)/stemwords$(EXEEXT)
 	find java.$(BASELINE) -name '*.class' -delete
 
 baseline-diff:
@@ -345,7 +390,7 @@ $(STEMMING_DATA)/% $(STEMMING_DATA_ABS)/%:
 	@[ -f '$@' ] || { echo '$@: Test data not found'; echo 'Checkout the snowball-data repo as "$(STEMMING_DATA_ABS)"'; exit 1; }
 
 snowball$(EXEEXT): $(COMPILER_OBJECTS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) $(o_for_exe) $@ $^
 
 $(COMPILER_OBJECTS): $(COMPILER_HEADERS)
 
@@ -400,19 +445,19 @@ libstemmer/modules_utf8.h libstemmer/mkinc_utf8.mak: libstemmer/mkmodules.pl $(M
 libstemmer/libstemmer.o: libstemmer/modules.h $(C_LIB_HEADERS)
 
 libstemmer.a: libstemmer/libstemmer.o $(RUNTIME_OBJECTS) $(C_LIB_OBJECTS)
-	$(AR) -cru $@ $^
+	$(AR) $(ARFLAGS_)$@ $^
 
 examples/%.o: examples/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c $(o_for_obj) $@ $<
 
 stemwords$(EXEEXT): $(STEMWORDS_OBJECTS) libstemmer.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) $(o_for_exe) $@ $^
 
 tests/%.o: tests/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c $(o_for_obj) $@ $<
 
 stemtest$(EXEEXT): $(STEMTEST_OBJECTS) libstemmer.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) $(o_for_exe) $@ $^
 
 $(c_src_dir)/stem_UTF_8_%.c $(c_src_dir)/stem_UTF_8_%.h: $(ALGORITHMS)/%.sbl snowball$(EXEEXT)
 	@mkdir -p $(c_src_dir)
@@ -431,7 +476,29 @@ $(c_src_dir)/stem_ISO_8859_2_%.c $(c_src_dir)/stem_ISO_8859_2_%.h: $(ALGORITHMS)
 	$(SNOWBALL_COMPILE) charsets/ISO-8859-2.sbl $< -o $@ -eprefix $*_ISO_8859_2_ -r ../runtime
 
 $(c_src_dir)/stem_%.o: $(c_src_dir)/stem_%.c $(c_src_dir)/stem_%.h
-	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDES) $(CPPFLAGS) -c $(o_for_obj) $@ $<
+
+# C++
+
+$(cxx_src_dir)/factory.h: libstemmer/modules.txt
+	$(cxx_src_dir)/generate_factory.pl $< > $@
+
+$(cxx_src_dir)/stemwords$(EXEEXT): $(CXX_STEMWORDS_OBJECTS) $(CXX_RUNTIME_OBJECTS) $(CXX_OBJECTS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
+
+$(cxx_src_dir)/%_stemmer.cxx $(cxx_src_dir)/%_stemmer.h: $(ALGORITHMS)/%.sbl snowball$(EXEEXT)
+	@mkdir -p $(cxx_src_dir)
+	$(SNOWBALL_COMPILE) -c++ -cheader '"stemmer.h"' $< -o $@ -r ../runtime $(cxx_encoding_opt)
+
+$(cxx_src_dir)/%stemmer.o: $(cxx_src_dir)/%stemmer.h
+
+$(cxx_src_dir)/%.o: $(cxx_src_dir)/%.cxx
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(CPPFLAGS) -c -o $@ $<
+
+$(cxx_src_dir)/stemmer.cxx: GNUmakefile $(cxx_src_dir)/generate_algorithms.pl $(MODULES)
+	$(cxx_src_dir)/generate_algorithms.pl $@ $(MODULES)
+
+$(cxx_src_dir)/snowball_runtime.cxx: runtime/snowball_runtime.c
 
 # C#
 
@@ -594,9 +661,10 @@ dist_libstemmer_c: \
 	echo 'endif' >> $${dest}/Makefile && \
 	echo 'CFLAGS=-O2' >> $${dest}/Makefile && \
 	echo 'CPPFLAGS=-Iinclude' >> $${dest}/Makefile && \
+	echo 'ARFLAGS=-cr' >> $${dest}/Makefile && \
 	echo 'all: libstemmer.a stemwords$$(EXEEXT)' >> $${dest}/Makefile && \
 	echo 'libstemmer.a: $$(snowball_sources:.c=.o)' >> $${dest}/Makefile && \
-	echo '	$$(AR) -cru $$@ $$^' >> $${dest}/Makefile && \
+	echo '	$$(AR) $(ARFLAGS) $$@ $$^' >> $${dest}/Makefile && \
 	echo 'stemwords$$(EXEEXT): examples/stemwords.o libstemmer.a' >> $${dest}/Makefile && \
 	echo '	$$(CC) $$(CFLAGS) -o $$@ $$^' >> $${dest}/Makefile && \
 	echo 'clean:' >> $${dest}/Makefile && \
@@ -773,7 +841,13 @@ CLEANDIRS += $(ada_src_dir) ada/bin ada/obj
 
 .PHONY: check check_compilertest check_stemtest check_utf8 check_iso_8859_1 check_iso_8859_2 check_koi8r
 
-check: check_compilertest check_utf8 check_iso_8859_1 check_iso_8859_2 check_koi8r
+# We don't run these when runtime tests are enabled (for stemtest, because it
+# contains tests of the shipped algorithms; for compilertest, because it is
+# orthogonal to the algorithms and so redundant to run it in both
+# configuations).
+EXTRA_TESTS ?= check_compilertest check_stemtest
+
+check: $(EXTRA_TESTS) check_utf8 check_iso_8859_1 check_iso_8859_2 check_koi8r
 
 check_compilertest: tests/compilertest
 	cd tests && ./compilertest
@@ -789,13 +863,16 @@ check_iso_8859_2: $(ISO_8859_2_algorithms:%=check_iso_8859_2_%)
 
 check_koi8r: $(KOI8_R_algorithms:%=check_koi8r_%)
 
+# Allows e.g. make RUN_STEMWORDS='valgrind ./stemwords' check
+RUN_STEMWORDS = ./stemwords
+
 check_utf8_%: $(STEMMING_DATA)/% stemwords$(EXEEXT)
 	@echo "Checking output of $* stemmer with UTF-8"
 	@if test -f '$</voc.txt.gz' ; then \
-	  gzip -dc '$</voc.txt.gz'|./stemwords$(EXEEXT) -c UTF_8 -l $* -o tmp.txt; \
+	  gzip -dc '$</voc.txt.gz'|$(RUN_STEMWORDS) -c UTF_8 -l $* -o tmp.txt; \
 	  gzip -dc '$</output.txt.gz'|$(DIFF) -u - tmp.txt; \
 	else \
-	  ./stemwords$(EXEEXT) -c UTF_8 -l $* -i $</voc.txt |\
+	  $(RUN_STEMWORDS) -c UTF_8 -l $* -i $</voc.txt |\
 	  $(TEE_TO_TMP_TXT) \
 	  $(DIFF) -u $</output.txt -; \
 	fi
@@ -805,25 +882,53 @@ check_utf8_%: $(STEMMING_DATA)/% stemwords$(EXEEXT)
 check_iso_8859_1_%: $(STEMMING_DATA)/% stemwords$(EXEEXT)
 	@echo "Checking output of $* stemmer with ISO_8859_1"
 	@$(ICONV) -f UTF-8 -t ISO-8859-1 '$</voc.txt' |\
-	    ./stemwords -c ISO_8859_1 -l $* |\
+	    $(RUN_STEMWORDS) -c ISO_8859_1 -l $* |\
 	    $(ICONV) -f ISO-8859-1 -t UTF-8 |\
 	    $(DIFF) -u '$</output.txt' -
 
 check_iso_8859_2_%: $(STEMMING_DATA)/% stemwords$(EXEEXT)
 	@echo "Checking output of $* stemmer with ISO_8859_2"
 	@$(ICONV) -f UTF-8 -t ISO-8859-2 '$</voc.txt' |\
-	    ./stemwords -c ISO_8859_2 -l $* |\
+	    $(RUN_STEMWORDS) -c ISO_8859_2 -l $* |\
 	    $(ICONV) -f ISO-8859-2 -t UTF-8 |\
 	    $(DIFF) -u '$</output.txt' -
 
 check_koi8r_%: $(STEMMING_DATA)/% stemwords$(EXEEXT)
 	@echo "Checking output of $* stemmer with KOI8R"
 	@$(ICONV) -f UTF-8 -t KOI8-R '$</voc.txt' |\
-	    ./stemwords -c KOI8_R -l $* |\
+	    $(RUN_STEMWORDS) -c KOI8_R -l $* |\
 	    $(ICONV) -f KOI8-R -t UTF-8 |\
 	    $(DIFF) -u '$</output.txt' -
 
 CLEANDIRS += $(c_src_dir)
+
+###############################################################################
+# C++
+###############################################################################
+
+.PHONY: cxx check_cxx do_check_cxx
+
+cxx: $(CXX_SOURCES) $(CXX_HEADERS) $(cxx_src_dir)/stemwords$(EXEEXT)
+
+check_cxx: cxx
+	$(MAKE) do_check_cxx
+
+do_check_cxx: $(libstemmer_algorithms:%=check_cxx_%)
+
+check_cxx_%: $(STEMMING_DATA_ABS)/%
+	@echo "Checking output of $* stemmer for C++"
+	@if test -f '$</voc.txt.gz' ; then \
+	  gzip -dc '$</voc.txt.gz' |\
+	    $(cxx_src_dir)/stemwords -l $* -o tmp.txt; \
+	  gzip -dc '$</output.txt.gz'|$(DIFF) -u - tmp.txt; \
+	else \
+	  $(cxx_src_dir)/stemwords -l $* -i $</voc.txt |\
+	      $(DIFF) -u $</output.txt - ;\
+	fi
+	@if test -f '$</voc.txt.gz' ; then rm tmp.txt ; fi
+
+CLEANFILES += $(CXX_SOURCES) $(CXX_HEADERS) cxx/*.o \
+	      $(cxx_src_dir)/stemmer.cxx $(cxx_src_dir)/stemwords$(EXEEXT)
 
 ###############################################################################
 # C#
@@ -1123,14 +1228,14 @@ CLEANFILES += $(ZIG_SOURCES) zig/stemwords$(EXEEXT)
 # Runtime test integration is currently a bit clunky, and you need to switch
 # your tree to a different state to run runtime tests.
 #
-# make clean setup_runtime_tests
+# make setup_runtime_tests
 #
 # Then targets like `check_utf8`, `check_python`, etc will run the runtime
 # tests for a particular target language.
 #
 # Once you're done, switch the tree back to the normal state:
 #
-# make clean clean_runtime_tests
+# make clean_runtime_tests
 
 .PHONY: setup_runtime_tests clean_runtime_tests
 
@@ -1143,12 +1248,13 @@ setup_runtime_tests: clean_runtime_tests
 	  d=`echo "$$t"|sed 's/\.sbl$$//'` ;\
 	  mkdir $$r/$$d ;\
 	  echo ok > $$r/$$d/voc.txt ;\
-	  echo ok > $$r/$$d/output.txt ;\
+	  if [ -f $$d.out ] ; then cp $$d.out $$r/$$d/output.txt ; else echo ok > $$r/$$d/output.txt ; fi ;\
 	  echo "$$d UTF_8,ISO_8859_1 $$d" >> $$r/modules.txt ;\
 	done
 	printf '%s:=%s\n' \
 	  ALGORITHMS 'tests/runtime' \
 	  BASELINE 'rbaseline' \
+	  EXTRA_TESTS '' \
 	  MODULES '$(RUNTIME_DATA_DIR)/modules.txt' \
 	  other_algorithms '' \
 	  SNOWBALL_FLAGS '-comments' \
@@ -1158,5 +1264,5 @@ setup_runtime_tests: clean_runtime_tests
 	rm -f algorithms.mk
 	$(MAKE) algorithms.mk
 
-clean_runtime_tests:
+clean_runtime_tests: clean
 	rm -rf $(RUNTIME_DATA_DIR) overrides.mk

@@ -22,24 +22,27 @@ extern byte * get_input(const char * filename) {
             fprintf(stderr, "%s: Read error\n", filename);
             exit(1);
         }
+        SET_SIZE(u, size);
     } else {
         // Unseekable stream, e.g. piped stdin.
         size = 0;
         u = create_s(INITIAL_INPUT_BUFFER_SIZE);
         while (true) {
-            int s = CAPACITY(u) - size;
-            int r = fread(u + size, 1, s, input);
-            if (r < 0) {
-                fprintf(stderr, "%s: Read error\n", filename);
-                exit(1);
+            size_t s = CAPACITY(u) - size;
+            size_t r = fread(u + size, 1, s, input);
+            size += (int)r;
+            SET_SIZE(u, size);
+            if (r < s) {
+                if (ferror(input)) {
+                    fprintf(stderr, "%s: Read error\n", filename);
+                    exit(1);
+                }
+                break;
             }
-            size += r;
-            if (r < s) break;
-            u = increase_capacity_s(u, size);
+            u = reserve_s(u, size * 2);
         }
     }
     if (input != stdin) fclose(input);
-    SET_SIZE(u, size);
     return u;
 }
 
@@ -117,8 +120,8 @@ static int read_literal_string(struct tokeniser * t, int c) {
         if (ch == t->m_start) {
             /* Inside insert characters. */
             int c0 = c;
-            int newlines = false; /* no newlines as yet */
-            int all_whitespace = true; /* no printing chars as yet */
+            bool newlines = false; /* no newlines as yet */
+            bool all_whitespace = true; /* no printing chars as yet */
             while (true) {
                 if (c >= SIZE(p) || (p[c] == '\n' && !all_whitespace)) {
                     error1(t, "string literal not terminated");
@@ -171,12 +174,12 @@ static int read_literal_string(struct tokeniser * t, int c) {
                                 error1(t, "character values exceed 0x01ffff");
                             }
                             /* Ensure there's enough space for a max length
-                             * UTF-8 sequence. */
+                             * UTF-8 sequence and then encode the character
+                             * directly into that space. */
                             int b_size = SIZE(t->b);
-                            if (CAPACITY(t->b) < b_size + 3) {
-                                t->b = increase_capacity_b(t->b, 3);
-                            }
-                            SET_SIZE(t->b, b_size + put_utf8(codepoint, t->b + b_size));
+                            t->b = reserve_b(t->b, b_size + 4);
+                            SET_SIZE(t->b, b_size + put_utf8(codepoint,
+                                                             t->b + b_size));
                         } else {
                             if (t->encoding == ENC_SINGLEBYTE) {
                                 /* Only ISO-8859-1 is handled this way - for
@@ -300,7 +303,13 @@ static int next_token(struct tokeniser * t) {
           case '<':
             if (ch2 == '-') return c_slicefrom;      // <-
             if (ch2 == '=') return c_le;             // <=
-            if (ch2 == '+') return c_insert;         // <+
+            if (ch2 == '+') {                        // <+
+                fprintf(stderr,
+                        "%s:%d: warning: `<+` is a legacy feature - "
+                        "use `insert` instead\n",
+                        t->file, t->line_number);
+                return c_insert;
+            }
             --t->c;
             return c_lt;                             // <
           case '=':
@@ -464,8 +473,27 @@ extern int read_token(struct tokeniser * t) {
                 int base = 0;
                 read_chars(t);
                 code = read_token(t);
-                if (code == c_hex) { base = 16; code = read_token(t); } else
-                if (code == c_decimal) { base = 10; code = read_token(t); }
+                if (code == c_hex) {
+                    // We use `hex` to define U+xxxx stringdefs for single-byte
+                    // character sets so suppress the warning there, e.g.:
+                    //
+                    //   stringdef U+02D9  hex 'FF'
+                    if (!(t->s[0] == 'U' && t->s[1] == '+')) {
+                        fprintf(stderr,
+                                "%s:%d: warning: `hex` is a legacy feature - "
+                                "use {U+1234} notation instead\n",
+                                t->file, t->line_number);
+                    }
+                    base = 16;
+                    code = read_token(t);
+                } else if (code == c_decimal) {
+                    fprintf(stderr,
+                            "%s:%d: warning: `decimal` is a legacy feature - "
+                            "use {U+1234} notation instead\n",
+                            t->file, t->line_number);
+                    base = 10;
+                    code = read_token(t);
+                }
                 if (code != c_literalstring) {
                     error1(t, "string omitted after stringdef");
                     continue;
@@ -490,7 +518,8 @@ extern int read_token(struct tokeniser * t) {
             case c_get: {
                 code = read_token(t);
                 if (code != c_literalstring) {
-                    error1(t, "string omitted after get"); continue;
+                    error1(t, "string omitted after get");
+                    continue;
                 }
                 t->get_depth++;
                 if (t->get_depth > 10) {
@@ -507,7 +536,7 @@ extern int read_token(struct tokeniser * t) {
                     for (r = t->includes; r; r = r->next) {
                         byte * s = copy_s(r->s);
                         s = add_sz_to_s(s, file);
-                        s[SIZE(s)] = 0;
+                        s = ensure_nul_s(s);
                         if (file_owned > 0) {
                             free(file);
                         } else {
@@ -520,7 +549,7 @@ extern int read_token(struct tokeniser * t) {
                     }
                 }
                 if (u == NULL) {
-                    error(t, "Can't get '", (byte *)file, strlen(file), "'");
+                    error(t, "Can't get '", (byte *)file, (int)strlen(file), "'");
                     exit(1);
                 }
                 memmove(q, t, sizeof(struct input));
@@ -539,7 +568,8 @@ extern int read_token(struct tokeniser * t) {
                     lose_s(p);
 
                     struct input * q = t->next;
-                    memmove(t, q, sizeof(struct input)); p = t->p;
+                    memmove(t, q, sizeof(struct input));
+                    p = t->p;
                     FREE(q);
 
                     t->get_depth--;
@@ -558,6 +588,15 @@ extern int peek_token(struct tokeniser * t) {
     int token = read_token(t);
     t->token_held = true;
     return token;
+}
+
+extern void push_token(struct tokeniser * t, int token) {
+    if (t->token_held) {
+        error1(t, "push_token() called but token already held");
+        exit(1);
+    }
+    t->token = token;
+    t->token_held = true;
 }
 
 extern const char * name_of_token(int code) {

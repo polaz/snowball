@@ -3,7 +3,7 @@
 
 #include "api.h"
 
-#define HEAD 2*sizeof(int)
+#include <limits.h>
 
 #ifdef __cplusplus
 /* Use reinterpret_cast<> to avoid -Wcast-align warnings from clang++. */
@@ -14,6 +14,32 @@
 # define SIZE(p)        ((const int *)(p))[-1]
 # define SET_SIZE(p, n) ((int *)(p))[-1] = n
 # define CAPACITY(p)    ((int *)(p))[-2]
+#endif
+
+/* We need to know the endianness to correctly encode among tables when
+ * we aren't using wide characters.
+ */
+#ifndef SNOWBALL_WIDE
+# if !defined SNOWBALL_BIGENDIAN && !defined SNOWBALL_LITTLEENDIAN
+#  ifdef __BYTE_ORDER__ /* GCC, clang */
+#   if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#    define SNOWBALL_BIGENDIAN
+#   else
+#    define SNOWBALL_LITTLEENDIAN
+#   endif
+#  elif defined _MSC_VER && (defined _M_AMD64 || defined _M_ARM || defined _M_ARM64 || defined _M_IX86) /* MSVC */
+#   define SNOWBALL_LITTLEENDIAN
+#  elif defined HAVE_ENDIAN_H
+#   include <endian.h>
+#   if BYTE_ORDER == BIG_ENDIAN
+#    define SNOWBALL_BIGENDIAN
+#   else
+#    define SNOWBALL_LITTLEENDIAN
+#   endif
+#  else
+#   error Platform endianness unknown - define SNOWBALL_BIGENDIAN or SNOWBALL_LITTLEENDIAN
+#  endif
+# endif
 #endif
 
 #ifdef SNOWBALL_RUNTIME_THROW_EXCEPTIONS
@@ -29,36 +55,24 @@ static void debug(struct SN_env * z, int n, int line) {
     int len = SIZE(z->p);
     printf("%3d (line %4d): [%d]'", n, line, len);
     for (i = 0; i <= len; i++) {
-        if (z->lb == i) printf("{");
-        if (z->bra == i) printf("[");
-        if (z->c == i) printf("|");
-        if (z->ket == i) printf("]");
-        if (z->l == i) printf("}");
+        if (z->lb == i) putc('{', stdout);
+        if (z->bra == i) putc('[', stdout);
+        if (z->c == i) putc('|', stdout);
+        if (z->ket == i) putc(']', stdout);
+        if (z->l == i) putc('}', stdout);
         if (i < len) {
             int ch = z->p[i];
             if (ch == 0) ch = '#';
-            printf("%c", ch);
+            putc(ch, stdout);
         }
     }
     printf("'\n");
+    fflush(stdout);
 }
 #endif
 
-struct among
-{
-    /* Number of symbols in s. */
-    int s_size;
-    /* Search string. */
-    const symbol * s;
-    /* Delta of index to longest matching substring, or 0 if none. */
-    int substring_i;
-    /* Result of the lookup. */
-    int result;
-    /* Optional condition routine index, or 0 if none. */
-    int function;
-};
-
-#ifdef __cplusplus
+/* MSVC doesn't like functions declared `extern "C"` throwing exceptions. */
+#if defined __cplusplus && !defined SNOWBALL_RUNTIME_THROW_EXCEPTIONS
 extern "C" {
 #endif
 
@@ -84,10 +98,8 @@ extern int eq_s_b(struct SN_env * z, int s_size, const symbol * s);
 extern int eq_v(struct SN_env * z, const symbol * p);
 extern int eq_v_b(struct SN_env * z, const symbol * p);
 
-extern int find_among(struct SN_env * z, const struct among * v, int v_size,
-                      int (*)(struct SN_env *));
-extern int find_among_b(struct SN_env * z, const struct among * v, int v_size,
-                        int (*)(struct SN_env *));
+extern int find_among(struct SN_env * z, const unsigned short * v);
+extern int find_among_b(struct SN_env * z, const unsigned short * v);
 
 extern SNOWBALL_ERR replace_s(struct SN_env * z, int c_bra, int c_ket, int s_size, const symbol * s);
 extern SNOWBALL_ERR slice_from_s(struct SN_env * z, int s_size, const symbol * s);
@@ -102,7 +114,7 @@ extern SNOWBALL_ERR assign_to(struct SN_env * z, symbol ** p);
 
 extern int len_utf8(const symbol * p);
 
-#ifdef __cplusplus
+#if defined __cplusplus && !defined SNOWBALL_RUNTIME_THROW_EXCEPTIONS
 }
 #endif
 

@@ -1,12 +1,16 @@
 #include <stdio.h>
+#if __STDC_VERSION__ < 202311l
+# include <stdbool.h>
+#elif defined _MSC_VER && __STDC_VERSION__-0 <= 202312l
+// MSVC 2026 with -std:clatest defines __STDC_VERSION__ to 202312 (one more
+// than the correct value for C23!) but doesn't provide bool, true and false.
+# include <stdbool.h>
+#endif
 
-#define SNOWBALL_VERSION "3.0.0"
+#define SNOWBALL_VERSION "3.1.1"
 
 typedef unsigned char byte;
 typedef unsigned short symbol;
-
-#define true 1
-#define false 0
 
 #define MALLOC check_malloc
 #define FREE check_free
@@ -26,7 +30,17 @@ typedef unsigned short symbol;
 extern symbol * create_b(int n);
 extern void report_b(FILE * out, const symbol * p);
 extern void lose_b(symbol * p);
-extern symbol * increase_capacity_b(symbol * p, int n);
+extern symbol * reserve_b_(symbol * p, int n);
+static inline symbol * reserve_b(symbol * p, int n) {
+    if (n > CAPACITY(p)) p = reserve_b_(p, n);
+    return p;
+}
+extern symbol * resize_b(symbol * p, int n);
+static inline symbol * ensure_nul_b(symbol * p) {
+    p = reserve_b(p, SIZE(p) + 1);
+    p[SIZE(p)] = 0;
+    return p;
+}
 extern symbol * add_to_b(symbol * p, const symbol * q, int n);
 extern symbol * copy_b(const symbol * p);
 extern char * b_to_sz(const symbol * p);
@@ -40,8 +54,17 @@ extern byte * create_s_from_data(const char * s, int n);
 
 extern void report_s(FILE * out, const byte * p);
 extern void lose_s(byte * p);
-extern byte * increase_capacity_s(byte * p, int n);
-extern byte * ensure_capacity_s(byte * p, int n);
+extern byte * reserve_s_(byte * p, int n);
+static inline byte * reserve_s(byte * p, int n) {
+    if (n > CAPACITY(p)) p = reserve_s_(p, n);
+    return p;
+}
+extern byte * resize_s(byte * p, int n);
+static inline byte * ensure_nul_s(byte * p) {
+    p = reserve_s(p, SIZE(p) + 1);
+    p[SIZE(p)] = 0;
+    return p;
+}
 extern byte * copy_s(const byte * p);
 extern byte * add_s_to_s(byte * p, const byte * s);
 extern byte * add_slen_to_s(byte * p, const char * s, int n);
@@ -181,8 +204,8 @@ struct tokeniser {
     int error_count;
     int token;
     int previous_token;
-    byte token_held;
-    byte token_reported_as_unexpected;
+    bool token_held;
+    bool token_reported_as_unexpected;
     enc encoding;
 
     struct include * includes;
@@ -201,6 +224,7 @@ extern byte * get_input(const char * filename);
 extern struct tokeniser * create_tokeniser(byte * b, char * file);
 extern int read_token(struct tokeniser * t);
 extern int peek_token(struct tokeniser * t);
+extern void push_token(struct tokeniser * t, int token);
 #define hold_token(T) ((T)->token_held = true)
 extern const char * name_of_token(int code);
 extern void disable_token(struct tokeniser * t, int code);
@@ -210,8 +234,8 @@ extern int space_count;
 extern void * check_malloc(size_t n);
 extern void check_free(void * p);
 
-extern int checked_snprintf(char *str, size_t size,
-                            const char *restrict format, ...)
+extern int checked_snprintf(char * str, size_t size,
+                            const char * format, ...)
 #ifdef __GNUC__
     __attribute__ ((__format__ (__printf__, 3, 4)))
 #endif
@@ -224,14 +248,20 @@ struct name {
     byte * s;
     byte type;                  /* t_string etc */
     byte mode;                  /* for routines, externals (m_forward, etc) */
-    byte value_used;            /* (For variables) is its value ever used? */
-    byte initialised;           /* (For variables) is it ever initialised? */
-    byte used_in_definition;    /* (grouping) used in grouping definition? */
-    byte amongvar_needed;       /* for routines, externals */
-    byte among_with_function;   /* (routines/externals) contains among with func */
-    byte case_collision;        /* A name of the same type differs only by case */
+    bool value_used;            /* (For variables) is its value ever used? */
+    bool initialised;           /* (For variables) is it ever initialised? */
+    bool used_in_definition;    /* (grouping) used in grouping definition? */
+    // (routines/externals) contains among
+    bool has_among;
+    // (routines/externals) contains among with function(s)
+    bool has_among_function;
+    bool case_collision;        /* A name of the same type differs only by case */
+    // (routines/externals) Could this directly or indirectly call itself?
+    bool recursive;
+    // (routines/externals) Temporary flag used while determining `recursive`.
+    bool visited;
     struct node * definition;   /* (routines/externals) c_define node */
-    int used_in_among;          /* (routines/externals) Count of uses in amongs */
+    int uses_in_among;          /* (routines/externals) Count of uses in amongs */
     // Initialised to -1; set to -2 if reachable from an external.
     // Reachable names are then numbered 0, 1, 2, ... with separate numbering
     // per type.
@@ -250,12 +280,19 @@ struct literalstring {
     symbol * b;
 };
 
+struct c_literalstring {
+    struct c_literalstring * next;
+    const symbol * b;
+};
+
 struct amongvec {
     symbol * b;      /* the string giving the case */
     int size;        /* - and its size */
     struct node * action; /* the corresponding action */
-    int i;           /* the amongvec index of the longest substring of b */
-    int result;      /* the numeric result for the case */
+    // The amongvec index of the longest substring of b, or -1 for none.
+    int i;
+    // among_var value for this case (starts from 1, or -1 for empty action).
+    int result;
     int line_number; /* for diagnostics */
     int function_index; /* 1-based */
     // 0-based index giving order of strings in source.  Used for stable
@@ -264,23 +301,54 @@ struct amongvec {
     struct name * function;
 };
 
+struct among_function_scenario {
+    struct name * function;
+    int t_result; // result (1...).
+    int f_result; // 0 or result (1...) or AFS_FLAG | af_index to chain.
+    // If `function` signals f, apply this delta to the value the cursor had on
+    // entry (add for forwards; subtract for backwards).
+    int cursor_adjustment;
+};
+
+// Used to find common-subtrees to reuse.  We currently linear search this for
+// each subtree we encode, but it seems in practice that's very fast, even for
+// the large amongs in the stemmers we ship (the largest seems to be in greek.sbl
+// which results in 1161 entries in this linked list).
+//
+// Note that if we had a separate list per value of len we would only need to
+// store start in each item (and could store as a symbol*).
+struct among_subtree {
+    struct among_subtree * next;
+    int start;
+    int len;
+};
+
 struct among {
     struct among * next;
-    struct amongvec * b;      /* pointer to the amongvec */
+    struct amongvec * v;      /* pointer to the amongvec */
+    // Details for among function handling in the state machine implementation.
+    struct among_function_scenario * af;
+    struct among_subtree * subtree;
+    int af_count;             /* number of entries in af. */
+    symbol * table;           /* table used in C implementation. */
+    byte * table_endianness;  /* flag values needing byteswap on big-endian. */
     int number;               /* amongs are numbered 0, 1, 2 ... */
     int literalstring_count;  /* in this among */
     int command_count;        /* in this among (excludes "no command" entries) */
     int nocommand_count;      /* number of "no command" entries in this among */
-    int function_count;       /* number of different functions in this among */
-    byte amongvar_needed;     /* do we need to set among_var? */
-    byte always_matches;      /* will this among always match? */
-    byte used;                /* is this among in reachable code? */
+    int function_count;       /* number of cases with a function in this among */
+    int unique_function_count;/* number of different functions in this among */
+    bool amongvar_needed;     /* do we need to set among_var? */
+    bool always_matches;      /* will this among always match? */
+    bool used;                /* is this among in reachable code? */
+    bool c0_used;             /* Need c0 variable in C implementation? */
+    bool duplicate;           /* Is this among a duplicate of another? */
+    int same_action;          /* type code if same for all actions; <0 otherwise */
     int shortest_size;        /* smallest non-zero string length in this among */
     int longest_size;         /* longest string length in this among */
     struct node * substring;  /* i.e. substring ... among ( ... ) */
     struct node ** commands;  /* array with command_count entries */
     struct node * node;       /* pointer to the node for this among */
-    struct name * in_routine; /* pointer to name for routine this among is in */
 };
 
 struct grouping {
@@ -305,7 +373,7 @@ struct node {
     // different value depending on platform and/or target language and/or
     // Unicode mode (e.g. maxint, sizeof '{U+0246}') - some warnings which
     // depend on a constant AE's value should only fire for the first set.
-    byte fixed_constant;
+    bool fixed_constant;
     // Return 0 for always f.
     // Return 1 for always t.
     // Return -1 for don't know (or can raise t or f).
@@ -332,7 +400,7 @@ struct analyser {
     struct name * names;
     struct literalstring * literalstrings;
     byte mode;
-    byte modifyable;          /* false inside reverse(...) */
+    bool modifyable;          /* false inside reverse(...) */
     struct node * program;
     struct node * program_end;
     /* name_count[i] counts the number of names of type i, where i is an enum
@@ -350,8 +418,8 @@ struct analyser {
     struct node * substring;  /* pending 'substring' in current routine definition */
     struct name * current_routine; /* routine/external we're currently on. */
     enc encoding;
-    byte int_limits_used;     /* are maxint or minint used? */
-    byte debug_used;          /* is the '?' command used? */
+    bool int_limits_used;     /* are maxint or minint used? */
+    bool debug_used;          /* is the '?' command used? */
 };
 
 enum analyser_modes {
@@ -375,8 +443,8 @@ extern void read_program(struct analyser * a, unsigned localise_mask);
 struct generator {
     struct analyser * analyser;
     struct options * options;
-    int unreachable;           /* 0 if code can be reached, 1 if current code
-                                * is unreachable. */
+    bool unreachable;          /* false if code can be reached, true if current
+                                * code is unreachable. */
     int var_number;            /* Number of next variable to use. */
     struct str * outbuf;       /* temporary str to store output */
     struct str * declarations; /* str storing variable declarations */
@@ -401,13 +469,15 @@ struct generator {
     int literalstring_count;
     int keep_count;      /* used to number keep/restore pairs to avoid compiler warnings
                             about shadowed variables */
-    int temporary_used;  /* track if temporary variable used (Ada and Pascal) */
+    bool temporary_used; /* track if temporary variable used (Ada and Pascal) */
     char java_import_arrays; /* need `import java.util.Arrays;` */
     char java_import_chararraysequence; /* need `import org.tartarus.snowball.CharArraySequence;` */
     // Prefix for generated variable names (`v_` by default).
     const char * varname_prefix;
     // String to indent by for each margin level (four spaces by default).
     const char * margin_indent;
+    // (C/C++) Linked list used to merge string literals.
+    struct c_literalstring * c_literalstrings;
 };
 
 /* Special values for failure_label in struct generator. */
@@ -425,9 +495,9 @@ struct options {
     byte * name;
     FILE * output_src;
     FILE * output_h;
-    byte syntax_tree;
-    byte comments;
-    byte coverage;
+    bool syntax_tree;
+    bool comments;
+    bool coverage;
     enc encoding;
     enum {
         LANG_C = 0, // We generate C by default.
@@ -465,7 +535,7 @@ extern void close_generator(struct generator * g);
 
 static inline int new_label(struct generator * g) {
     return g->next_label++;
-} 
+}
 
 extern struct str * vars_newname(struct generator * g);
 
@@ -479,6 +549,7 @@ extern void write_int(struct generator * g, int i);
 extern void wi3(struct generator * g, int i);
 extern void write_hex4(struct generator * g, unsigned ch);
 extern void write_hex(struct generator * g, unsigned i);
+extern void write_octal3(struct generator * g, unsigned n);
 extern void write_symbol(struct generator * g, symbol s);
 extern void write_s(struct generator * g, const byte * b);
 extern void write_str(struct generator * g, struct str * str);
@@ -491,9 +562,12 @@ extern void write_start_comment(struct generator * g,
                                 const char * comment_start,
                                 const char * comment_end);
 
-extern int K_needed(struct generator * g, struct node * p);
-extern int K_needed_for_connective(struct generator * g, struct node * p);
-extern int repeat_restore(struct generator * g, struct node * p);
+extern int K_needed(struct node * p);
+extern int K_needed_node_on_f(struct node * p);
+extern int K_needed_for_and(struct node * p);
+extern int K_needed_for_or(struct node * p);
+extern int repeat_restore(struct node * p);
+extern bool amongvar_needed(struct node * p);
 
 extern int just_return_on_fail(struct generator * g);
 extern int tailcallable(struct generator * g, struct node * p);

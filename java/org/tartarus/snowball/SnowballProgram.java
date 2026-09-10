@@ -1,23 +1,20 @@
 
 package org.tartarus.snowball;
 import java.lang.reflect.UndeclaredThrowableException;
-import java.io.Serializable;
 import java.util.Arrays;
 
 /**
  * Base class for a snowball stemmer
  */
-public class SnowballProgram implements Serializable {
+public class SnowballProgram {
     protected SnowballProgram()
     {
         cursor = 0;
         length = limit = 0;
         limit_backward = 0;
-        bra = cursor;
-        ket = limit;
+        bra = 0;
+        ket = 0;
     }
-
-    static final long serialVersionUID = 2016072500L;
 
     /**
      * Set the current string.
@@ -45,8 +42,8 @@ public class SnowballProgram implements Serializable {
         cursor = 0;
         this.length = limit = length;
         limit_backward = 0;
-        bra = cursor;
-        ket = limit;
+        bra = 0;
+        ket = 0;
     }
 
     /**
@@ -429,18 +426,19 @@ public class SnowballProgram implements Serializable {
 
 /*
 extern void debug(struct SN_env * z, int number, int line_count)
-{   int i;
+{
+    int i;
     int limit = SIZE(z->p);
     //if (number >= 0) printf("%3d (line %4d): '", number, line_count);
     if (number >= 0) printf("%3d (line %4d): [%d]'", number, line_count,limit);
-    for (i = 0; i <= limit; i++)
-    {   if (z->lb == i) printf("{");
+    for (i = 0; i <= limit; i++) {
+        if (z->lb == i) printf("{");
         if (z->bra == i) printf("[");
         if (z->c == i) printf("|");
         if (z->ket == i) printf("]");
         if (z->l == i) printf("}");
-        if (i < limit)
-        {   int ch = z->p[i];
+        if (i < limit) {
+            int ch = z->p[i];
             if (ch == 0) ch = '#';
             printf("%c", ch);
         }
