@@ -47,12 +47,14 @@ stringdef ch   '{U+0447}'
 stringdef sh   '{U+0448}'
 stringdef shch '{U+0449}'
 stringdef '    '{U+044C}'  // м'який знак (soft sign)
+stringdef ap   '{U+0027}'  // apostrophe (п'ять, об'єкт)
 stringdef iu   '{U+044E}'
 stringdef ia   '{U+044F}'
 
 
 routines ( mark_regions R2
            perfective_gerund
+           reflexive_full
            reflexive
            adjective
            verb
@@ -104,19 +106,34 @@ backwardmode (
         )
     )
 
-    define reflexive as (
+    // Present-tense reflexive endings: the whole ending goes and what is
+    // left is the verb root, so no further verb rule may run on it
+    // (залишається → залиш, not зал via -иш; називається → назив, not наз)
+    define reflexive_full as (
         [substring] among (
-            // Reflexive verb endings
-            '{t}{y}{s}{ia}' '{t}{y}{s}{'}'  // -тися/-тись (infinitive reflexive)
-            '{l}{a}{s}{'}'                  // -лась (past fem reflexive)
-            '{v}{s}{ia}' '{v}{s}{'}'        // -вся/-всь (past masc reflexive)
-            // Present-tense reflexive: strip full ending to reach verb root
-            // e.g. будується→буду, вважається→вваж, пишеться→пиш, водиться→вод
-            '{u}{ie}{t}{'}{s}{ia}'          // -ується (будується, виконується)
             '{a}{ie}{t}{'}{s}{ia}'          // -ається (вважається, займається)
+            '{a}{iu}{t}{'}{s}{ia}'          // -аються
+            '{ia}{ie}{t}{'}{s}{ia}'         // -яється (розчиняється)
+            '{ia}{iu}{t}{'}{s}{ia}'         // -яються
             '{ie}{t}{'}{s}{ia}'             // -ється  (б'ється, дається)
             '{e}{t}{'}{s}{ia}'             // -еться  (пишеться, береться, бореться)
             '{y}{t}{'}{s}{ia}'             // -иться  (водиться, вводиться)
+                (delete)
+            // -ується/-уються → -ув: the stem meets the infinitive and past
+            // tense of -увати verbs (будується → будув = будувати)
+            '{u}{ie}{t}{'}{s}{ia}' '{u}{iu}{t}{'}{s}{ia}'
+                (<- '{u}{v}')
+            '{iu}{ie}{t}{'}{s}{ia}' '{iu}{iu}{t}{'}{s}{ia}'
+                (<- '{iu}{v}')
+        )
+    )
+
+    define reflexive as (
+        [substring] among (
+            // Reflexive endings that leave a verb form behind
+            '{t}{y}{s}{ia}' '{t}{y}{s}{'}'  // -тися/-тись (infinitive reflexive)
+            '{l}{a}{s}{'}'                  // -лась (past fem reflexive)
+            '{v}{s}{ia}' '{v}{s}{'}'        // -вся/-всь (past masc reflexive)
             '{s}{ia}' '{s}{'}'              // -ся/-сь (generic reflexive)
                 (delete)
         )
@@ -237,6 +254,7 @@ backwardmode (
                 '{a}{ts}{i}{iu}'              // -ацію
                 '{a}{ts}{i}{ia}'              // -ація
                 '{a}{ts}{i}{yi}'              // -ації (gen/dat/loc — ї=U+0457)
+                '{a}{ts}{i}{i`}'              // -ацій (gen pl)
                 // other -ія nouns: the -і- stem marker goes with the ending
                 // (академія → академ = академічний, географія → географ)
                 '{i}{ia}{m}{y}'               // -іями
@@ -284,10 +302,14 @@ backwardmode (
                 '{yi}{m}' '{i}{m}' '{y}{m}'             // Dative plural
                 '{i}{i`}'                               // Dative/Locative singular fem
                 '{y}{i`}'                               // Nominative singular masc
-                '{o}{i`}'                               // Various
                 // -ія noun instrumental (before verb -ю intercepts)
                 '{ie}{iu}'                              // -єю (поліграфією→поліграфі)
                     (delete)
+                // Instrumental of nouns in -жа/-ча/-ша/-ща (площею, межею),
+                // before verb -ю intercepts; elsewhere -ею belongs to -ей/-ея
+                // nouns (музею, галерею) and is left to verb -ю
+                '{e}{iu}'
+                    ( ('{zh}' or '{ch}' or '{sh}' or '{shch}') delete )
             )
         )
     )
@@ -304,8 +326,15 @@ backwardmode (
         ( [substring] among (
                 '{a}{t}{y}' '{i}{t}{y}'         // Infinitive (читати→чит, робити→роб)
                 '{y}{t}{y}'                     // Infinitive (робити with и)
-                '{a}{v}' '{i}{v}'               // Past masc (читав→чит, робів→роб)
-                '{y}{v}'                        // Past masc (робив→роб)
+                // -яти verbs (стояти, розчиняти → розчин): the я series
+                // mirrors the а series
+                '{ia}{v}' '{ia}{l}{a}' '{ia}{l}{y}' '{ia}{l}{o}'
+                '{ia}{ie}' '{ia}{iu}{t}{'}' '{ia}{ie}{m}{o}' '{ia}{ie}{t}{e}' '{ia}{ie}{sh}'
+                // Future (читатиме, робитимуть, стоятимемо)
+                '{a}{t}{y}{m}{e}' '{a}{t}{y}{m}{u}{t}{'}' '{a}{t}{y}{m}{e}{m}{o}' '{a}{t}{y}{m}{e}{t}{e}' '{a}{t}{y}{m}{e}{sh}' '{a}{t}{y}{m}{u}'
+                '{y}{t}{y}{m}{e}' '{y}{t}{y}{m}{u}{t}{'}' '{y}{t}{y}{m}{e}{m}{o}' '{y}{t}{y}{m}{e}{t}{e}' '{y}{t}{y}{m}{e}{sh}' '{y}{t}{y}{m}{u}'
+                '{i}{t}{y}{m}{e}' '{i}{t}{y}{m}{u}{t}{'}' '{i}{t}{y}{m}{e}{m}{o}' '{i}{t}{y}{m}{e}{t}{e}' '{i}{t}{y}{m}{e}{sh}' '{i}{t}{y}{m}{u}'
+                '{ia}{t}{y}{m}{e}' '{ia}{t}{y}{m}{u}{t}{'}' '{ia}{t}{y}{m}{e}{m}{o}' '{ia}{t}{y}{m}{e}{t}{e}' '{ia}{t}{y}{m}{e}{sh}' '{ia}{t}{y}{m}{u}'
                 '{a}{iu}'                       // Present 1st sg (читаю)
                 // Note: -ію ({i}{iu}) removed — it falsely captures noun accusative
                 // of -ія words (поліграфію, демократію). Verb -ію (я дію) handled
@@ -322,10 +351,42 @@ backwardmode (
                 // always fires first, so verb -им is unreachable
                 '{y}{t}{'}' '{yi}{t}{'}'        // Present 3rd sg (робить, стоїть)
                 '{ie}{sh}' '{e}{sh}' '{y}{sh}'  // Present 2nd sg (знаєш, живеш, робиш)
+                // Past tense with its thematic vowel, so the stem meets the
+                // infinitive (читала → чит = читати, робили → роб = робити)
+                '{y}{l}{a}' '{y}{l}{y}' '{y}{l}{o}'
+                '{i}{l}{a}' '{i}{l}{y}' '{i}{l}{o}'
+                // Present of -ати verbs with the thematic vowel (читає → чит)
+                '{a}{ie}' '{a}{ie}{m}{o}' '{a}{ie}{t}{e}' '{a}{ie}{sh}'
                 '{ie}'                          // Present 3rd sg/future
                 '{i`}'                          // Imperative sg
-                '{v}'                           // Past masc (fallback)
+                    // found_ia: these are verb forms, so professional must
+                    // not read the root as an agent noun (проникає → проник)
+                    (set found_ia delete)
+                // Past masc -ав/-ів/-ив: also the genitive plural of nouns
+                // (працівників), so professional may still follow
+                '{a}{v}' '{i}{v}' '{y}{v}'
                     (delete)
+                // Past -ала/-али/-ало, but not after a vowel: -іали/-еали/
+                // -уали are noun plurals (матеріали, ідеали, ритуали)
+                '{a}{l}{a}' '{a}{l}{y}' '{a}{l}{o}'
+                    ( not v set found_ia delete )
+                // Infinitive -яти (стояти, розчиняти), but not after с, ц or
+                // an apostrophe: those are the numerals десяти, двадцяти,
+                // п'яти, дев'яти
+                '{ia}{t}{y}' '{ia}{t}{'}'   // -яти, and 3rd pl -ять (стоять, болять)
+                    ( not ('{s}' or '{ts}' or '{ap}') set found_ia delete )
+                // Present of -увати/-ювати verbs: -ує/-ують → -ув so the stem
+                // meets the infinitive and past tense (будує → будув = будував)
+                '{u}{ie}' '{u}{iu}{t}{'}' '{u}{ie}{m}{o}' '{u}{ie}{t}{e}' '{u}{ie}{sh}'
+                    (<- '{u}{v}')
+                '{iu}{ie}' '{iu}{iu}{t}{'}' '{iu}{ie}{m}{o}' '{iu}{ie}{t}{e}' '{iu}{ie}{sh}'
+                    (<- '{iu}{v}')
+                // Past masc -в (fallback): a vowel other than о precedes it
+                // (no verb ends in -ов or -ств, while Іванов, готов, товариств
+                // do). A vowel outside pV cannot be seen (став), so the
+                // ending is removed as before there.
+                '{v}'
+                    ( not '{o}' (atlimit or v) delete )
                 // Present 1st sg -у (fallback), but not after -ств: -ству is
                 // the dative of -ство nouns (товариству), left for noun.
                 '{u}'
@@ -341,7 +402,7 @@ backwardmode (
                 // -ороли/-орола are the one verb family behind о (бороли,
                 // виборола), so о only guards when not preceded by р.
                 '{l}{a}' '{l}{y}'
-                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}') delete )
+                    ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}' or ('{e}' not '{v}')) delete )
                 '{l}{o}'
                     ( not (('{o}' not '{r}') or '{l}' or '{t}' or '{d}' or ('{e}' not '{v}')) delete )
                 // Present 1st sg -ю (fallback), but not after -іст: -істю is
@@ -356,7 +417,7 @@ backwardmode (
                 // lets noun -и run. (-кти cannot be guarded: втекти and
                 // факти both have the к inside pV.)
                 '{t}{y}'
-                    ( not ('{n}' or '{e}' or '{o}') delete )
+                    ( not ('{n}' or '{e}' or '{o}' or '{i}{s}' or '{y}{s}') delete )
           )
         )
     )
@@ -396,7 +457,9 @@ backwardmode (
                 // oblique cases of -ство (авторства, суспільстві, мистецтвом)
                 '{s}{t}{v}{a}' '{s}{t}{v}{u}' '{s}{t}{v}{i}' '{s}{t}{v}{o}{m}'
                 '{s}{t}{v}{a}{m}' '{s}{t}{v}{a}{m}{y}' '{s}{t}{v}{a}{kh}'
+                '{s}{t}{v}'                  // gen pl (товариств)
                     (delete)
+                '{ts}{t}{v}' (<- '{ts}')     // gen pl (мистецтв → мистец)
                 // oblique cases of -цтво keep the ц (козацтва → козац)
                 '{ts}{t}{v}{a}' (<- '{ts}') '{ts}{t}{v}{u}' (<- '{ts}')
                 '{ts}{t}{v}{i}' (<- '{ts}') '{ts}{t}{v}{o}{m}' (<- '{ts}')
@@ -422,10 +485,15 @@ backwardmode (
     define professional as (
         [substring] among (
             '{i}{v}{n}{y}{k}'  '{a}{l}{'}{n}{y}{k}'  '{e}{l}{'}{n}{y}{k}'  // -івник, -альник, -ельник
-            '{ia}{r}' '{a}{r}'  // -яр, -ар (каменяр)
+            '{ia}{r}'           // -яр (каменяр, столяр)
             '{n}{y}{k}'         // -ник (generic agent)
             '{a}{ch}'           // -ач (копач)
                 (delete)
+            // -ар only after к (лікар, пекар, аптекар, друкар, бібліотекар):
+            // elsewhere it is part of the root (долар, товар, секретар,
+            // гектар, базар, календар, комар)
+            '{a}{r}'
+                ( '{k}' delete )
         )
     )
 
@@ -455,18 +523,21 @@ backwardmode (
             '{e}{n}{'}{k}{a}' '{e}{n}{'}{k}{y}' '{e}{n}{'}{k}{o}' '{e}{n}{'}{k}{i}'
             '{i}{n}{'}{k}{a}' '{i}{n}{'}{k}{y}' '{i}{n}{'}{k}{o}' '{i}{n}{'}{k}{i}'
 
-            // Animal young (shorter forms)
-            '{e}{n}{ia}'  // -еня (козеня, лисеня)
+            // -еня (козеня, лисеня) omitted: it is also the genitive of
+            // камінь, корінь, ступінь, промінь (каменя, кореня)
 
-            // Short diminutives (3+ chars to avoid conflicts with regular nouns)
-            '{ch}{y}{k}'          // -чик (хлопчик)
-            '{y}{n}{k}{a}' '{i}{n}{k}{a}'  // -инка/-інка (дівчинка)
+            // -инка/-інка omitted: сторінка, картинка, тварина/тваринка,
+            // новинка are not diminutives of стор/карт/твар/нов, and
+            // дівчинка = дівчинку holds without it
             // Note: -усь omitted — reflexive(-сь)+verb(-у) handles these (дідусь→дід, братусь→брат)
-            '{u}{n}{'}'  '{i}{n}{'}'  '{e}{n}{'}'
-            // 2-char: -ик/-ік/-ок safe (few non-diminutive nouns end with these)
-            // NOT -ка/-ко (too common as regular noun endings)
-            '{y}{k}' '{i}{k}' '{o}{k}'
+            // -інь omitted: камінь, корінь, промінь, осінь are not diminutives
+            '{u}{n}{'}'  '{e}{n}{'}'
                 (delete)
+            // -ок: the о is fleeting, so only it goes and the stem meets the
+            // oblique forms (будинок → будинк = будинку, грибок = грибка).
+            // -ик/-ік are not fleeting (хлопчик = хлопчика) and are left alone.
+            '{o}{k}'
+                (<- '{k}')
         )
     )
 
@@ -478,34 +549,41 @@ backwardmode (
             '{e}{n}{'}{k}'        // -еньк
             '{o}{n}{'}{k}'        // -оньк
             '{i}{n}{'}{k}'        // -іньк
-            // -ятк intentionally excluded: occurs in stems like
-            // десятк(а), пам'ятк(а); -ятко handled in diminutive above
-            '{i}{t}{k}'           // -ітк
-            '{a}{t}{k}'           // -атк
+            // -ятк/-атк/-ітк intentionally excluded: they occur in stems like
+            // десятк(а), пам'ятк(а), початк(у), додатк(у), дітк(и);
+            // -ятко/-атко/-ітко are handled in diminutive above
                 (delete)
         )
     )
 
+    // Verbal nouns in -ння with all their cases (nom/gen -ння, dat -нню,
+    // loc -нні, inst -нням, pl -ннями/-ннях, gen pl -нь). found_verb: the
+    // verb root is left, so comparative and tidy_up must not read a final
+    // -іш as a comparative (вирішення → виріш = вирішити, not вир);
+    // found_ia keeps professional off it (проникання → проник, not про).
     define verbal_noun as (
-        setlimit tomark p2 for ([substring]) among (
-            // R2 guard prevents over-stemming. мигтіння, боління, бродіння
-            '{a}{n}{n}{ia}'        // -ання
-            '{ia}{n}{n}{ia}'       // -яння
-            '{i}{n}{n}{ia}'        // -іння
-            '{e}{n}{n}{ia}'        // -ення
-            // oblique cases of the same nouns: -нню (dat), -нням (inst),
-            // -ннями, -ннях (адмініструванням → адмініструв). Locative -нні
-            // is left out: it is also the plural of -нний adjectives
-            // (нечисленні, дорогоцінні).
-            '{a}{n}{n}{iu}' '{a}{n}{n}{ia}{m}' '{a}{n}{n}{ia}{m}{y}' '{a}{n}{n}{ia}{kh}'
-            '{ia}{n}{n}{iu}' '{ia}{n}{n}{ia}{m}' '{ia}{n}{n}{ia}{m}{y}' '{ia}{n}{n}{ia}{kh}'
-            '{i}{n}{n}{iu}' '{i}{n}{n}{ia}{m}' '{i}{n}{n}{ia}{m}{y}' '{i}{n}{n}{ia}{kh}'
-            '{e}{n}{n}{iu}' '{e}{n}{n}{ia}{m}' '{e}{n}{n}{ia}{m}{y}' '{e}{n}{n}{ia}{kh}'
-                // found_verb: the verb root is left, so comparative and
-                // tidy_up must not read a final -іш as a comparative
-                // (вирішення → виріш = вирішити, not вир); found_ia keeps
-                // professional off it (проникання → проник, not про)
-                (set found_ia set found_verb delete)
+        // -іння keeps the R2 guard: many -іння nouns are not deverbal
+        // (каміння, коріння, насіння, покоління)
+        ( setlimit tomark p2 for ([substring]) among (
+              '{i}{n}{n}{ia}' '{i}{n}{n}{iu}' '{i}{n}{n}{i}'
+              '{i}{n}{n}{ia}{m}' '{i}{n}{n}{ia}{m}{y}' '{i}{n}{n}{ia}{kh}'
+              '{i}{n}{'}'   // gen pl (володінь, поколінь); камінь, корінь sit outside R2
+                  (set found_ia set found_verb delete)
+          )
+        )
+        or
+        // -ання/-ення/-яння are deverbal, so pV is guard enough and short
+        // roots meet their verb (рішення = рішень = рішити → ріш, читання
+        // → чит). The plural of -нний adjectives (нечисленні, притаманні)
+        // shares the -нні form; the frequent ones are kept by exception.
+        ( [substring] among (
+              '{a}{n}{n}{ia}' '{ia}{n}{n}{ia}' '{e}{n}{n}{ia}'
+              '{a}{n}{n}{iu}' '{a}{n}{n}{i}' '{a}{n}{n}{ia}{m}' '{a}{n}{n}{ia}{m}{y}' '{a}{n}{n}{ia}{kh}'
+              '{ia}{n}{n}{iu}' '{ia}{n}{n}{i}' '{ia}{n}{n}{ia}{m}' '{ia}{n}{n}{ia}{m}{y}' '{ia}{n}{n}{ia}{kh}'
+              '{e}{n}{n}{iu}' '{e}{n}{n}{i}' '{e}{n}{n}{ia}{m}' '{e}{n}{n}{ia}{m}{y}' '{e}{n}{n}{ia}{kh}'
+              '{a}{n}{'}' '{e}{n}{'}' '{ia}{n}{'}'   // gen pl: видань, рішень
+                  (set found_ia set found_verb delete)
+          )
         )
     )
 
@@ -538,6 +616,16 @@ backwardmode (
             '{u}{v}{a}{t}'        // -уват
             '{o}{v}{a}{t}'        // -оват
             '{i}{v}{n}'           // -івн (пасічниківна → пасічник)
+            // -ув/-юв: the theme of -увати verbs, left by the infinitive,
+            // past tense, -ування and -увальний; the root then meets the
+            // participle and the -ація noun (адаптував, адаптування,
+            // адаптований, адаптація → адапт). R2 keeps short roots whole
+            // (будув, малюв).
+            '{u}{v}' '{iu}{v}'
+            '{o}{v}{u}{v}'        // -овув (використовувати → використ = використання)
+            // -уван/-юван left by adjective endings on oblique forms of
+            // -уваний participles (виконуваним → виконуван → викон)
+            '{u}{v}{a}{n}' '{iu}{v}{a}{n}'
             '{o}{v}'              // -ов (дощовий → дощ after adj -ий)
             '{ia}{n}'             // -ян (кахляний → кахл after adj -ий)
 
@@ -631,6 +719,64 @@ define stem as (
         '{k}{y}{yi}{v}'                     (<- '{k}{y}{ie}{v}')           // Київ
         '{o}{s}{i}{b}'                      (<- '{o}{s}{o}{b}')            // осіб
         '{l}{iu}{d}{e}{i`}'                 (<- '{l}{iu}{d}')              // людей
+        // могила (grave) would meet могти (can) once -ила is a verb ending
+        '{m}{o}{h}{y}{l}{a}'                (<- '{m}{o}{h}{y}{l}')         // могила
+        '{m}{o}{h}{y}{l}{y}'                (<- '{m}{o}{h}{y}{l}')         // могили
+        '{m}{o}{h}{y}{l}{u}'                (<- '{m}{o}{h}{y}{l}')         // могилу
+        '{m}{o}{h}{y}{l}{i}'                (<- '{m}{o}{h}{y}{l}')         // могилі
+        '{m}{o}{h}{y}{l}{o}{iu}'            (<- '{m}{o}{h}{y}{l}')         // могилою
+        // Names in -ило would lose -ило as a past tense (Кирило, Данило)
+        '{k}{y}{r}{y}{l}{o}'                (<- '{k}{y}{r}{y}{l}')         // Кирило
+        '{k}{y}{r}{y}{l}{a}'                (<- '{k}{y}{r}{y}{l}')         // Кирила
+        '{k}{y}{r}{y}{l}{u}'                (<- '{k}{y}{r}{y}{l}')         // Кирилу
+        '{k}{y}{r}{y}{l}{o}{m}'             (<- '{k}{y}{r}{y}{l}')         // Кирилом
+        '{k}{y}{r}{y}{l}{i}'                (<- '{k}{y}{r}{y}{l}')         // Кирилі
+        '{d}{a}{n}{y}{l}{o}'                (<- '{d}{a}{n}{y}{l}')         // Данило
+        '{d}{a}{n}{y}{l}{a}'                (<- '{d}{a}{n}{y}{l}')         // Данила
+        '{d}{a}{n}{y}{l}{u}'                (<- '{d}{a}{n}{y}{l}')         // Данилу
+        '{d}{a}{n}{y}{l}{o}{m}'             (<- '{d}{a}{n}{y}{l}')         // Данилом
+        '{d}{a}{n}{y}{l}{i}'                (<- '{d}{a}{n}{y}{l}')         // Данилі
+        // Толстой keeps the Russian adjective ending -ой, which is not a
+        // Ukrainian ending (герой → геро must not lose its й)
+        '{t}{o}{l}{s}{t}{o}{i`}'            (<- '{t}{o}{l}{s}{t}')         // Толстой
+        // Adverbs in -ало are not a past tense
+        '{ch}{y}{m}{a}{l}{o}'               (<- '{ch}{y}{m}{a}{l}{o}')     // чимало
+        '{z}{a}{m}{a}{l}{o}'                (<- '{z}{a}{m}{a}{l}')         // замало
+        '{n}{e}{m}{a}{l}{o}'                (<- '{n}{e}{m}{a}{l}')         // немало
+        '{n}{e}{v}{d}{a}{l}{o}'             (<- '{n}{e}{v}{d}{a}{l}')      // невдало
+        '{d}{o}{s}{k}{o}{n}{a}{l}{o}'       (<- '{d}{o}{s}{k}{o}{n}{a}{l}') // досконало
+        // The most frequent nouns in -ал whose genitive (animate) or plural
+        // looks like a past tense once -ала/-али is a verb ending
+        '{h}{e}{n}{e}{r}{a}{l}{a}'          (<- '{h}{e}{n}{e}{r}{a}{l}')   // генерала
+        '{h}{e}{n}{e}{r}{a}{l}{y}'          (<- '{h}{e}{n}{e}{r}{a}{l}')   // генерали
+        '{a}{d}{m}{i}{r}{a}{l}{a}'          (<- '{a}{d}{m}{i}{r}{a}{l}')   // адмірала
+        '{m}{a}{r}{sh}{a}{l}{a}'            (<- '{m}{a}{r}{sh}{a}{l}')     // маршала
+        '{k}{a}{r}{d}{y}{n}{a}{l}{a}'       (<- '{k}{a}{r}{d}{y}{n}{a}{l}') // кардинала
+        '{f}{i}{n}{a}{l}{y}'                (<- '{f}{i}{n}{a}{l}')         // фінали
+        '{p}{i}{v}{f}{i}{n}{a}{l}{y}'       (<- '{p}{i}{v}{f}{i}{n}{a}{l}') // півфінали
+        '{k}{a}{n}{a}{l}{y}'                (<- '{k}{a}{n}{a}{l}')         // канали
+        '{zh}{u}{r}{n}{a}{l}{y}'            (<- '{zh}{u}{r}{n}{a}{l}')     // журнали
+        '{s}{y}{h}{n}{a}{l}{y}'             (<- '{s}{y}{h}{n}{a}{l}')      // сигнали
+        '{m}{i}{n}{e}{r}{a}{l}{y}'          (<- '{m}{i}{n}{e}{r}{a}{l}')   // мінерали
+        '{k}{r}{y}{s}{t}{a}{l}{y}'          (<- '{k}{r}{y}{s}{t}{a}{l}')   // кристали
+        '{m}{e}{t}{a}{l}{y}'                (<- '{m}{e}{t}{a}{l}')         // метали
+        '{k}{v}{a}{r}{t}{a}{l}{y}'          (<- '{k}{v}{a}{r}{t}{a}{l}')   // квартали
+        // верства (layer) would lose -ства as the abstract-noun suffix
+        '{v}{e}{r}{s}{t}{v}{a}'             (<- '{v}{e}{r}{s}{t}{v}')      // верства
+        '{v}{e}{r}{s}{t}{v}{y}'             (<- '{v}{e}{r}{s}{t}{v}')      // верстви
+        '{v}{e}{r}{s}{t}{v}{u}'             (<- '{v}{e}{r}{s}{t}{v}')      // верству
+        '{v}{e}{r}{s}{t}{v}{i}'             (<- '{v}{e}{r}{s}{t}{v}')      // верстві
+        '{v}{e}{r}{s}{t}{v}{o}{iu}'         (<- '{v}{e}{r}{s}{t}{v}')      // верствою
+        '{v}{e}{r}{s}{t}{v}'                (<- '{v}{e}{r}{s}{t}{v}')      // верств
+        // Мельник (surname, and miller) would become мел via -ник and tidy_up
+        '{m}{e}{l}{'}{n}{y}{k}'             (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельник
+        '{m}{e}{l}{'}{n}{y}{k}{a}'          (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельника
+        '{m}{e}{l}{'}{n}{y}{k}{u}'          (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельнику
+        '{m}{e}{l}{'}{n}{y}{k}{o}{m}'       (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельником
+        '{m}{e}{l}{'}{n}{y}{k}{y}'          (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельники
+        '{m}{e}{l}{'}{n}{y}{k}{i}{v}'       (<- '{m}{e}{l}{'}{n}{y}{k}')   // Мельників
+        // кристал: genitive кристала would be read as a past tense
+        '{k}{r}{y}{s}{t}{a}{l}{a}'          (<- '{k}{r}{y}{s}{t}{a}{l}')   // кристала
         // матерія (matter) would meet матері (of мати, mother) after -ія
         // removal; keep the -і stem it had before the -ія rule.
         '{m}{a}{t}{e}{r}{i}{ia}'            (<- '{m}{a}{t}{e}{r}{i}')      // матерія
@@ -639,10 +785,250 @@ define stem as (
         '{m}{a}{t}{e}{r}{i}{ie}{iu}'        (<- '{m}{a}{t}{e}{r}{i}')      // матерією
         // досить (enough) is an adverb, not the 3rd person of a verb
         '{d}{o}{s}{y}{t}{'}'                (<- '{d}{o}{s}{y}{t}{'}')      // досить
+        // Numerals in -яти whose с/апостроф sits outside pV, so the -яти
+        // guard cannot see it (десяти → десят as десять)
+        '{d}{e}{s}{ia}{t}{y}'               (<- '{d}{e}{s}{ia}{t}')        // десяти
+        '{d}{e}{s}{ia}{t}{'}'               (<- '{d}{e}{s}{ia}{t}')        // десять
+        // Months and other -ень/-інь nouns with a fleeting or alternating
+        // vowel: the nominative takes the stem of the oblique forms
+        // (березень/березня → березн, рівень/рівня → рівн, камінь/каменя → камен)
+        '{s}{i}{ch}{e}{n}{'}'               (<- '{s}{i}{ch}{n}')           // січень
+        '{b}{e}{r}{e}{z}{e}{n}{'}'          (<- '{b}{e}{r}{e}{z}{n}')      // березень
+        '{k}{v}{i}{t}{e}{n}{'}'             (<- '{k}{v}{i}{t}{n}')         // квітень
+        '{t}{r}{a}{v}{e}{n}{'}'             (<- '{t}{r}{a}{v}{n}')         // травень
+        '{ch}{e}{r}{v}{e}{n}{'}'            (<- '{ch}{e}{r}{v}{n}')        // червень
+        '{l}{y}{p}{e}{n}{'}'                (<- '{l}{y}{p}{n}')            // липень
+        '{s}{e}{r}{p}{e}{n}{'}'             (<- '{s}{e}{r}{p}{n}')         // серпень
+        '{v}{e}{r}{e}{s}{e}{n}{'}'          (<- '{v}{e}{r}{e}{s}{n}')      // вересень
+        '{zh}{o}{v}{t}{e}{n}{'}'            (<- '{zh}{o}{v}{t}{n}')        // жовтень
+        '{h}{r}{u}{d}{e}{n}{'}'             (<- '{h}{r}{u}{d}{n}')         // грудень
+        '{r}{i}{v}{e}{n}{'}'                (<- '{r}{i}{v}{n}')            // рівень
+        '{u}{ch}{e}{n}{'}'                  (<- '{u}{ch}{n}')              // учень
+        '{s}{t}{u}{p}{i}{n}{'}'             (<- '{s}{t}{u}{p}{e}{n}')      // ступінь
+        '{p}{r}{o}{m}{i}{n}{'}'             (<- '{p}{r}{o}{m}{e}{n}')      // промінь
+        '{k}{a}{m}{i}{n}{'}'                (<- '{k}{a}{m}{e}{n}')         // камінь
+        '{k}{o}{r}{i}{n}{'}'                (<- '{k}{o}{r}{e}{n}')         // корінь
+        '{p}{ap}{ia}{t}{y}'                 (<- '{p}{ap}{ia}{t}')          // п'яти
+        '{d}{e}{v}{ap}{ia}{t}{y}'           (<- '{d}{e}{v}{ap}{ia}{t}')    // дев'яти
+        // пророк keeps its о (not fleeting: пророка), unlike будинок/будинку
+        '{p}{r}{o}{r}{o}{k}'                (<- '{p}{r}{o}{r}{o}{k}')      // пророк
+        '{p}{r}{o}{r}{o}{k}{a}'             (<- '{p}{r}{o}{r}{o}{k}')      // пророка
+        '{p}{r}{o}{r}{o}{k}{u}'             (<- '{p}{r}{o}{r}{o}{k}')      // пророку
+        '{p}{r}{o}{r}{o}{k}{o}{m}'          (<- '{p}{r}{o}{r}{o}{k}')      // пророком
+        '{p}{r}{o}{r}{o}{k}{y}'             (<- '{p}{r}{o}{r}{o}{k}')      // пророки
+        '{p}{r}{o}{r}{o}{k}{i}{v}'          (<- '{p}{r}{o}{r}{o}{k}')      // пророків
+        // людина/люди and дитина/діти: singular and plural have different
+        // roots; the singular takes the stem of the plural
+        '{l}{iu}{d}{y}{n}{a}'               (<- '{l}{iu}{d}')              // людина
+        '{l}{iu}{d}{y}{n}{y}'               (<- '{l}{iu}{d}')              // людини
+        '{l}{iu}{d}{y}{n}{i}'               (<- '{l}{iu}{d}')              // людині
+        '{l}{iu}{d}{y}{n}{u}'               (<- '{l}{iu}{d}')              // людину
+        '{l}{iu}{d}{y}{n}{o}{iu}'           (<- '{l}{iu}{d}')              // людиною
+        '{d}{y}{t}{y}{n}{a}'                (<- '{d}{i}{t}')               // дитина
+        '{d}{y}{t}{y}{n}{y}'                (<- '{d}{i}{t}')               // дитини
+        '{d}{y}{t}{y}{n}{i}'                (<- '{d}{i}{t}')               // дитині
+        '{d}{y}{t}{y}{n}{u}'                (<- '{d}{i}{t}')               // дитину
+        '{d}{y}{t}{y}{n}{o}{iu}'            (<- '{d}{i}{t}')               // дитиною
+        // день: every form is too short for pV, so the whole paradigm is listed
+        '{d}{e}{n}{'}'                      (<- '{d}{n}')                  // день
+        '{d}{n}{ia}'                        (<- '{d}{n}')                  // дня
+        '{d}{n}{iu}'                        (<- '{d}{n}')                  // дню
+        '{d}{n}{e}{m}'                      (<- '{d}{n}')                  // днем
+        '{d}{n}{i}'                         (<- '{d}{n}')                  // дні
+        '{d}{n}{i}{v}'                      (<- '{d}{n}')                  // днів
+        '{d}{n}{ia}{m}'                     (<- '{d}{n}')                  // дням
+        '{d}{n}{ia}{m}{y}'                  (<- '{d}{n}')                  // днями
+        '{d}{n}{ia}{kh}'                    (<- '{d}{n}')                  // днях
+        // genitive plurals with a fleeting е (земля → земель, будівля → будівель)
+        '{z}{e}{m}{e}{l}{'}'                (<- '{z}{e}{m}{l}')            // земель
+        '{b}{u}{d}{i}{v}{e}{l}{'}'          (<- '{b}{u}{d}{i}{v}')         // будівель
+        // голова → голів (gen pl) would meet гол (goal)
+        '{h}{o}{l}{i}{v}'                   (<- '{h}{o}{l}{o}{v}')         // голів
+        // євангеліє is the same noun as євангелія
+        '{ie}{v}{a}{n}{h}{e}{l}{i}{ie}'     (<- '{ie}{v}{a}{n}{h}{e}{l}')  // євангеліє
+        // осінь/осені: і/е alternation
+        '{o}{s}{i}{n}{'}'                   (<- '{o}{s}{e}{n}')            // осінь
+        // Cities whose nominative -ів alternates with -ов/-ев/-ол
+        '{l}{'}{v}{i}{v}'                   (<- '{l}{'}{v}{o}{v}')         // Львів
+        '{kh}{a}{r}{k}{i}{v}'               (<- '{kh}{a}{r}{k}{o}{v}')     // Харків
+        '{ch}{e}{r}{n}{i}{h}{i}{v}'         (<- '{ch}{e}{r}{n}{i}{h}')      // Чернігів (Чернігова → черніг via -ов)
+        '{m}{y}{k}{o}{l}{a}{yi}{v}'         (<- '{m}{y}{k}{o}{l}{a}{ie}{v}') // Миколаїв
+        '{t}{e}{r}{n}{o}{p}{i}{l}{'}'       (<- '{t}{e}{r}{n}{o}{p}{o}{l}') // Тернопіль
+        '{b}{o}{r}{y}{s}{p}{i}{l}{'}'       (<- '{b}{o}{r}{y}{s}{p}{o}{l}') // Бориспіль
+        // Place names in -ань are not the genitive plural of a -ння noun
+        '{b}{e}{r}{e}{z}{a}{n}{'}'          (<- '{b}{e}{r}{e}{z}{a}{n}')   // Березань
+        '{a}{s}{t}{r}{a}{kh}{a}{n}{'}'      (<- '{a}{s}{t}{r}{a}{kh}{a}{n}') // Астрахань
+        '{b}{o}{t}{o}{sh}{a}{n}{'}'         (<- '{b}{o}{t}{o}{sh}{a}{n}')  // Ботошань
+        // останній: its feminine and plural forms look like a -ння noun
+        '{o}{s}{t}{a}{n}{n}{ia}'            (<- '{o}{s}{t}{a}{n}')         // остання
+        '{o}{s}{t}{a}{n}{n}{iu}'            (<- '{o}{s}{t}{a}{n}')         // останню
+        '{o}{s}{t}{a}{n}{n}{i}'             (<- '{o}{s}{t}{a}{n}')         // останні
+        '{p}{i}{v}{d}{e}{n}{n}{i}'          (<- '{p}{i}{v}{d}{e}{n}')      // південні
+        '{shch}{o}{d}{e}{n}{n}{i}'          (<- '{shch}{o}{d}{e}{n}')      // щоденні
+        '{s}{v}{ia}{shch}{e}{n}{n}{i}'      (<- '{s}{v}{ia}{shch}{e}{n}')  // священні
+        '{d}{zh}{o}{v}{a}{n}{n}{i}'         (<- '{d}{zh}{o}{v}{a}{n}')     // Джованні
+        '{l}{o}{z}{a}{n}{n}{i}'             (<- '{l}{o}{z}{a}{n}')         // Лозанні
+        // Nouns in -ань that are not the genitive plural of a -ння noun
+        '{v}{i}{d}{s}{t}{a}{n}{'}'          (<- '{v}{i}{d}{s}{t}{a}{n}')   // відстань
+        '{v}{i}{d}{s}{t}{a}{n}{n}{iu}'      (<- '{v}{i}{d}{s}{t}{a}{n}')   // відстанню
+        '{t}{a}{i`}{v}{a}{n}{'}'            (<- '{t}{a}{i`}{v}{a}{n}')     // Тайвань
+        '{h}{a}{v}{a}{n}{'}'                (<- '{h}{a}{v}{a}{n}')         // гавань
+        '{b}{r}{e}{t}{a}{n}{'}'             (<- '{b}{r}{e}{t}{a}{n}')      // Бретань
+        '{k}{u}{b}{a}{n}{'}'                (<- '{k}{u}{b}{a}{n}')         // Кубань
+        '{p}{r}{y}{s}{t}{a}{n}{'}'          (<- '{p}{r}{y}{s}{t}{a}{n}')   // пристань
+        '{p}{o}{z}{n}{a}{n}{'}'             (<- '{p}{o}{z}{n}{a}{n}')      // Познань
+        '{r}{ia}{z}{a}{n}{'}'               (<- '{r}{ia}{z}{a}{n}')        // Рязань
+        '{iu}{n}{'}{n}{a}{n}{'}'            (<- '{iu}{n}{'}{n}{a}{n}')     // Юньнань
+        '{kh}{a}{i`}{n}{a}{n}{'}'           (<- '{kh}{a}{i`}{n}{a}{n}')    // Хайнань
+        '{h}{o}{r}{b}{a}{n}{'}'             (<- '{h}{o}{r}{b}{a}{n}')      // Горбань
+        '{d}{o}{v}{h}{a}{n}{'}'             (<- '{d}{o}{v}{h}{a}{n}')      // Довгань
+        // мішень (target) and домен (domain): -енню/-енні are not the
+        // verbal-noun cases here
+        '{m}{i}{sh}{e}{n}{'}'               (<- '{m}{i}{sh}{e}{n}')        // мішень
+        '{m}{i}{sh}{e}{n}{n}{iu}'           (<- '{m}{i}{sh}{e}{n}')        // мішенню
+        '{d}{o}{m}{e}{n}{n}{i}'             (<- '{d}{o}{m}{e}{n}')         // доменні
+        // відання (jurisdiction) would become the preposition від
+        '{v}{i}{d}{a}{n}{n}{ia}'            (<- '{v}{i}{d}{a}{n}')         // відання
+        '{v}{i}{d}{a}{n}{n}{i}'             (<- '{v}{i}{d}{a}{n}')         // віданні
+        '{v}{i}{d}{a}{n}{'}'                (<- '{v}{i}{d}{a}{n}')         // відань
+        // Plurals of -нний adjectives that look like the locative of a -ння noun
+        '{p}{r}{y}{t}{a}{m}{a}{n}{n}{i}'    (<- '{p}{r}{y}{t}{a}{m}{a}{n}') // притаманні
+        '{n}{e}{ch}{y}{s}{l}{e}{n}{n}{i}'   (<- '{n}{e}{ch}{y}{s}{l}{e}{n}') // нечисленні
+        '{d}{o}{r}{o}{h}{o}{ts}{i}{n}{n}{i}' (<- '{d}{o}{r}{o}{h}{o}{ts}{i}{n}') // дорогоцінні
+        '{n}{e}{s}{k}{i}{n}{ch}{e}{n}{n}{i}' (<- '{n}{e}{s}{k}{i}{n}{ch}{e}{n}') // нескінченні
+        '{b}{a}{r}{a}{b}{a}{n}{n}{i}'       (<- '{b}{a}{r}{a}{b}{a}{n}')   // барабанні
+        '{f}{o}{r}{t}{e}{p}{i}{a}{n}{n}{i}' (<- '{f}{o}{r}{t}{e}{p}{i}{a}{n}') // фортепіанні
+        '{p}{o}{v}{n}{o}{ts}{i}{n}{n}{i}'   (<- '{p}{o}{v}{n}{o}{ts}{i}{n}') // повноцінні
+        // Locative singular of -ка/-га nouns with к→ц, г→з: the 43 forms
+        // with at least 2000 occurrences (511k in all; віці alone 197k).
+        // No rule can do this: -ці is also the plural of -ець (українці)
+        // and -иці the plural of -иця (вулиці).
+        '{v}{i}{ts}{i}'                     (<- '{v}{i}{k}')               // віці
+        '{o}{k}{r}{u}{z}{i}'                (<- '{o}{k}{r}{u}{h}')         // окрузі
+        '{l}{i}{z}{i}'                      (<- '{l}{i}{h}')               // лізі
+        '{a}{m}{e}{r}{y}{ts}{i}'            (<- '{a}{m}{e}{r}{y}{k}')      // америці
+        '{r}{i}{ch}{ts}{i}'                 (<- '{r}{i}{ch}{k}')           // річці
+        '{k}{n}{y}{z}{i}'                   (<- '{k}{n}{y}{h}')            // книзі
+        '{a}{f}{r}{y}{ts}{i}'               (<- '{a}{f}{r}{y}{k}')         // африці
+        '{r}{e}{s}{p}{u}{b}{l}{i}{ts}{i}'   (<- '{r}{e}{s}{p}{u}{b}{l}{i}{k}') // республіці
+        '{s}{m}{u}{z}{i}'                   (<- '{s}{m}{u}{h}')            // смузі
+        '{b}{i}{b}{l}{i}{o}{t}{e}{ts}{i}'   (<- '{b}{i}{b}{l}{i}{o}{t}{e}{k}') // бібліотеці
+        '{p}{r}{y}{s}{ia}{z}{i}'            (<- '{p}{r}{y}{s}{ia}{h}')     // присязі
+        '{d}{o}{r}{o}{z}{i}'                (<- '{d}{o}{r}{o}{h}')         // дорозі
+        '{d}{i}{l}{ia}{n}{ts}{i}'           (<- '{d}{i}{l}{ia}{n}{k}')     // ділянці
+        '{p}{r}{a}{k}{t}{y}{ts}{i}'         (<- '{p}{r}{a}{k}{t}{y}{k}')   // практиці
+        '{f}{u}{t}{b}{o}{l}{ts}{i}'         (<- '{f}{u}{t}{b}{o}{l}{k}')   // футболці
+        '{v}{a}{z}{i}'                      (<- '{v}{a}{h}')               // вазі
+        '{v}{y}{s}{t}{a}{v}{ts}{i}'         (<- '{v}{y}{s}{t}{a}{v}{k}')   // виставці
+        '{m}{e}{k}{s}{y}{ts}{i}'            (<- '{m}{e}{k}{s}{y}{k}')      // мексиці
+        '{p}{r}{a}{z}{i}'                   (<- '{p}{r}{a}{h}')            // празі
+        '{r}{o}{z}{r}{o}{b}{ts}{i}'         (<- '{r}{o}{z}{r}{o}{b}{k}')   // розробці
+        '{z}{a}{t}{o}{ts}{i}'               (<- '{z}{a}{t}{o}{k}')         // затоці
+        '{t}{o}{ch}{ts}{i}'                 (<- '{t}{o}{ch}{k}')           // точці
+        '{p}{o}{l}{i}{t}{y}{ts}{i}'         (<- '{p}{o}{l}{i}{t}{y}{k}')   // політиці
+        '{m}{u}{z}{y}{ts}{i}'               (<- '{m}{u}{z}{y}{k}')         // музиці
+        '{u}{v}{a}{z}{i}'                   (<- '{u}{v}{a}{h}')            // увазі
+        '{p}{i}{d}{h}{o}{t}{o}{v}{ts}{i}'   (<- '{p}{i}{d}{h}{o}{t}{o}{v}{k}') // підготовці
+        '{h}{o}{n}{ts}{i}'                  (<- '{h}{o}{n}{k}')            // гонці
+        '{t}{r}{i}{i`}{ts}{i}'              (<- '{t}{r}{i}{i`}{k}')        // трійці
+        '{s}{t}{o}{r}{i}{n}{ts}{i}'         (<- '{s}{t}{o}{r}{i}{n}{k}')   // сторінці
+        '{n}{a}{u}{ts}{i}'                  (<- '{n}{a}{u}{k}')            // науці
+        '{p}{i}{d}{t}{r}{y}{m}{ts}{i}'      (<- '{p}{i}{d}{t}{r}{y}{m}{k}') // підтримці
+        '{t}{e}{kh}{n}{i}{ts}{i}'           (<- '{t}{e}{kh}{n}{i}{k}')     // техніці
+        '{n}{y}{z}{ts}{i}'                  (<- '{n}{y}{z}{k}')            // низці
+        '{k}{l}{a}{d}{ts}{i}'               (<- '{k}{l}{a}{d}{k}')         // кладці
+        '{e}{k}{o}{n}{o}{m}{i}{ts}{i}'      (<- '{e}{k}{o}{n}{o}{m}{i}{k}') // економіці
+        '{s}{t}{r}{i}{ch}{ts}{i}'           (<- '{s}{t}{r}{i}{ch}{k}')     // стрічці
+        '{r}{u}{ts}{i}'                     (<- '{r}{u}{k}')               // руці
+        '{z}{b}{i}{r}{ts}{i}'               (<- '{z}{b}{i}{r}{k}')         // збірці
+        '{ch}{e}{r}{z}{i}'                  (<- '{ch}{e}{r}{h}')           // черзі
+        '{k}{r}{y}{t}{y}{ts}{i}'            (<- '{k}{r}{y}{t}{y}{k}')      // критиці
+        '{f}{a}{b}{r}{y}{ts}{i}'            (<- '{f}{a}{b}{r}{y}{k}')      // фабриці
+        '{o}{b}{k}{l}{a}{d}{y}{n}{ts}{i}'   (<- '{o}{b}{k}{l}{a}{d}{y}{n}{k}') // обкладинці
+        '{r}{y}{z}{i}'                      (<- '{r}{y}{h}')               // ризі
+        // Frequent adverbs, pronouns and particles whose stem would collide
+        // with a content word (потім → пот, тому → том, біля → біл,
+        // коли → кол, далі → дал, нічого → ніч). Listed last with no
+        // command, so they are left unchanged.
+        '{b}{i}{l}{ia}'                     // біля
+        '{p}{r}{o}{t}{y}'                   // проти
+        '{k}{o}{l}{y}'                      // коли
+        '{d}{a}{l}{i}'                      // далі
+        '{r}{a}{z}{o}{m}'                   // разом
+        '{s}{a}{m}{e}'                      // саме
+        '{m}{a}{l}{o}'                      // мало
+        '{p}{o}{t}{i}{m}'                   // потім
+        '{t}{o}{m}{u}'                      // тому
+        '{l}{y}{sh}{e}'                     // лише
+        '{d}{u}{zh}{e}'                     // дуже
+        '{m}{a}{i`}{zh}{e}'                 // майже
+        '{t}{o}{d}{i}'                      // тоді
+        '{s}{e}{b}{e}'                      // себе
+        '{z}{n}{o}{v}{u}'                   // знову
+        '{z}{a}{m}{i}{s}{t}{'}'             // замість
+        '{p}{o}{k}{y}'                      // поки
+        '{o}{k}{r}{i}{m}'                   // окрім
+        '{k}{u}{d}{y}'                      // куди
+        '{v}{e}{s}{'}'                      // весь
+        '{u}{v}{e}{s}{'}'                   // увесь
+        '{t}{r}{e}{b}{a}'                   // треба
+        '{k}{o}{h}{o}'                      // кого
+        '{k}{o}{m}{u}'                      // кому
+        '{t}{e}{b}{e}'                      // тебе
+        '{d}{e}{s}{'}'                      // десь
+        '{l}{e}{d}{'}'                      // ледь
+        '{t}{u}{d}{y}'                      // туди
+        '{n}{i}{ch}{o}{h}{o}'               // нічого
+        '{i}{n}{a}{k}{sh}{e}'               // інакше
+        '{ch}{o}{m}{u}'                     // чому
+        '{d}{o}{s}{i}'                      // досі
+        '{z}{v}{i}{d}{k}{y}'                // звідки
+        '{z}{v}{i}{d}{s}{y}'                // звідси
+        '{z}{v}{i}{d}{t}{y}'                // звідти
+        '{shch}{o}{i`}{n}{o}'               // щойно
+        '{s}{p}{r}{a}{v}{d}{i}'             // справді
+        '{z}{a}{v}{zh}{d}{y}'               // завжди
+        '{s}{'}{o}{h}{o}{d}{n}{i}'          // сьогодні
+        '{z}{h}{o}{d}{o}{m}'                // згодом
+        '{i}{n}{o}{d}{i}'                   // іноді
+        '{i}{n}{k}{o}{l}{y}'                // інколи
+        '{k}{o}{l}{y}{s}{'}'                // колись
+        '{v}{i}{d}{t}{o}{d}{i}'             // відтоді
+        '{d}{o}{t}{e}{p}{e}{r}'             // дотепер
+        // Nouns whose genitive plural or nominative would be read as a verb
+        // form or hit an alternation rule: справ, держав (not past tense),
+        // Сибір (Сибіру, not -бір/-бор)
+        '{s}{p}{r}{a}{v}'                   // справ
+        '{d}{e}{r}{zh}{a}{v}'               // держав
+        '{s}{y}{b}{i}{r}'                   // Сибір
       )
     )
     or
     (
+        // Vowel alternation in the closed last syllable of the most frequent
+        // noun families: the nominative has і where every other form has о
+        // (захід/заходу, вибір/вибору, ніч/ночі, стіл/столу). Applied to
+        // the whole word before suffix removal, outside pV.
+        do ( backwards (
+            [substring] among (
+                // (-від and -віз are left alone: досвід/досвіду and девіз keep
+                // the і, and Девід, Давід are names)
+                '{kh}{i}{d}'      (<- '{kh}{o}{d}')     // захід, дохід, схід, вихід, хід
+                '{b}{i}{r}'       (<- '{b}{o}{r}')      // вибір, збір, набір, відбір
+                '{r}{i}{s}{t}'    (<- '{r}{o}{s}{t}')   // зріст, приріст
+                '{n}{i}{ch}'      (<- '{n}{o}{ch}')     // ніч, північ
+                // The rest only as whole words: вологість, кисіль, Готфрід
+                // end the same way and keep their і
+                '{d}{i}{m}'       (atlimit <- '{d}{o}{m}')      // дім
+                '{s}{t}{i}{l}'    (atlimit <- '{s}{t}{o}{l}')   // стіл
+                '{p}{i}{ch}'      (atlimit <- '{p}{e}{ch}')     // піч
+                '{s}{i}{l}{'}'    (atlimit <- '{s}{o}{l}')      // сіль
+                '{k}{i}{n}{'}'    (atlimit <- '{k}{o}{n}')      // кінь
+                '{h}{i}{s}{t}{'}' (atlimit <- '{h}{o}{s}{t}')   // гість
+                '{p}{l}{i}{d}'    (atlimit <- '{p}{l}{o}{d}')   // плід
+                '{r}{i}{d}'       (atlimit <- '{r}{o}{d}')      // рід
+            )
+        ) )
         unset found_diminutive
         unset found_professional
         unset found_ia
@@ -651,10 +1037,14 @@ define stem as (
         backwards setlimit tomark pV for (
             do (
                  perfective_gerund or
-                 ( try reflexive
+                 ( reflexive_full set found_verb ) or
+                 ( try ( reflexive set found_verb )
                    ( verbal_noun or
-                     ( try ( ( professional (set found_professional) )
-                             or ( diminutive (set found_diminutive) ) )
+                     // do(): after a replacement (-ок <- к) the cursor sits
+                     // left of the new text; do() puts it back at the end so
+                     // the rules below see the whole word (залишок → залишк)
+                     ( do ( ( professional (set found_professional) )
+                            or ( diminutive (set found_diminutive) ) )
                        // found_verb: a verb stem may end in -іш (вирішити →
                        // виріш); comparative must leave it alone
                        not found_professional ( adjective or (verb set found_verb) or noun )
@@ -667,7 +1057,10 @@ define stem as (
 
             // Professional suffixes (after noun declension removed)
             // Skip if diminutive already fired (prevents -ач removal on собач- from собаченітко)
-            not found_diminutive not found_professional do ( not found_ia professional )
+            // Inside do(): a failing 'not' must not abort the steps below
+            // (found_professional words still need derivational and tidy_up:
+            // командувач → командув → команд, будильник → будил)
+            do ( not found_diminutive not found_professional not found_ia professional )
 
             do ( not found_verb comparative )
 
