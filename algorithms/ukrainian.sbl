@@ -296,7 +296,7 @@ backwardmode (
     define noun as (
         // -ості: gen/dat/loc sg, nom/gen pl of adj-derived abstract nouns.
         // `not atlimit` keeps at least one char before the limit (pV),
-        // preventing волість→вол; falls through to -{i} below → волост.
+        // preventing волості→вол; falls through to -{i} below → волост.
         // Encoding-portable guard (cursor counts bytes in UTF-8 but chars in
         // wide mode, so a numeric cursor test would stem inconsistently).
         // Verb handles -остей (ends in -й), so the -{o}{s}{t}{e}{i`} entry
